@@ -11,6 +11,9 @@ repositories {
 
 dependencies {
 	implementation(kotlin("stdlib-jdk8"))
+
+	compile(files("${System.getenv("INFORMIXDIR")}/jdbc/lib/ifxjdbc.jar"))
+
 	testImplementation("org.jetbrains.kotlin:kotlin-test")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 }
