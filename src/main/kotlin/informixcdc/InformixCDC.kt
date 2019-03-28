@@ -15,15 +15,15 @@ import java.time.Instant
 import java.util.*
 
 internal data class CDCError(
-        val code: Int,
-        val name: String,
-        val description: String
+    val code: Int,
+    val name: String,
+    val description: String
 )
 
 class CDCException(
-        val code: Int,
-        val name: String,
-        val description: String
+    val code: Int,
+    val name: String,
+    val description: String
 ) : Exception("CDCError: $name (code: $code): $description") {
     internal constructor(e: CDCError) : this(e.code, e.name, e.description)
 }
@@ -31,29 +31,29 @@ class CDCException(
 class UnknownCDCErrorCode(val code: Int) : Exception("Unknown CDC error code: $code")
 
 class TableDescription(
-        val name: String,
-        val database: String,
-        val owner: String,
-        val columns: ColumnsDescription? = null
+    val name: String,
+    val database: String,
+    val owner: String,
+    val columns: ColumnsDescription? = null
 )
 
 sealed class ColumnsDescription
 data class ColumnNames(val names: List<String>) : ColumnsDescription()
 data class FullColumnsDescription(
-        val fixed: List<Pair<ColumnWithDecoder, Int>>,
-        val variable: List<ColumnWithDecoder>
+    val fixed: List<Pair<ColumnWithDecoder, Int>>,
+    val variable: List<ColumnWithDecoder>
 ) : ColumnsDescription()
 
 private fun FullColumnsDescription.fixedThenVariable(): List<String> =
         fixed.map { (nameType, _) -> nameType.name } + variable.map { it.name }
 
 class Records(
-        private val getConn: (String) -> Connection,
-        private val server: String,
-        private val tables: List<TableDescription>,
-        private val fromSeq: Long? = null,
-        private val readTimeout: Duration? = Duration.ofMillis(50),
-        private val maxRecords: Long = 100
+    private val getConn: (String) -> Connection,
+    private val server: String,
+    private val tables: List<TableDescription>,
+    private val fromSeq: Long? = null,
+    private val readTimeout: Duration? = Duration.ofMillis(50),
+    private val maxRecords: Long = 100
 ) {
     fun <R> use(block: (Iterable<Record>) -> R): R {
         val sizedTables = loadSizes(getConn, tables)
@@ -112,11 +112,11 @@ class Records(
 }
 
 private data class SizedTable(
-        val id: Int,
-        val name: String,
-        val database: String,
-        val owner: String?,
-        var columns: FullColumnsDescription
+    val id: Int,
+    val name: String,
+    val database: String,
+    val owner: String?,
+    var columns: FullColumnsDescription
 )
 
 private fun loadSizes(getConn: (String) -> Connection, tables: List<TableDescription>): Array<SizedTable> {
@@ -149,12 +149,11 @@ private fun Connection.fetchTableID(table: String): Int {
             getInt(1)
         }
     }
-
 }
 
 data class ColumnWithDecoder(
-        val name: String,
-        val decode: (ByteArray) -> Any?
+    val name: String,
+    val decode: (ByteArray) -> Any?
 )
 
 fun Connection.loadTableSize(table: String, columns: List<String>? = null): Pair<Int, FullColumnsDescription> {
@@ -276,10 +275,10 @@ private fun Connection.recordBytes(sessionID: Long): Iterable<Byte> {
 }
 
 private class RecordsIterable(
-        val bytes: Iterable<Byte>,
-        val types: Map<Int, String>,
-        val errorCodes: Map<Int, CDCError>,
-        val tablesByID: Map<Int, SizedTable>
+    val bytes: Iterable<Byte>,
+    val types: Map<Int, String>,
+    val errorCodes: Map<Int, CDCError>,
+    val tablesByID: Map<Int, SizedTable>
 ) : Iterable<Record> {
     private var bytesIter = bytes.iterator()
 
@@ -310,7 +309,7 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
     val payloadSize = bytes.readInt()
     bytes.drop(4) // Packet scheme
     val recordNumber = bytes.readInt()
-    
+
     return (when (types[recordNumber]) {
         "BEGINTX" ->
             BeginTx(
@@ -397,9 +396,9 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
 }
 
 private fun RecordsIterable.decodeRowImage(
-        bytes: Iterator<Byte>,
-        payloadSize: Int,
-        constructor: (Long, Int, String, String, String?, Map<String, ColumnValue>) -> RowImage
+    bytes: Iterator<Byte>,
+    payloadSize: Int,
+    constructor: (Long, Int, String, String, String?, Map<String, ColumnValue>) -> RowImage
 ): RowImage {
     val (seq, txID, table) = decodeTableIDHeader(bytes)
 
@@ -435,13 +434,11 @@ private fun RecordsIterable.decodeTableIDHeader(bytes: Iterator<Byte>): TableIDH
         }
 )
 
-
 private fun Iterator<Byte>.readInt(): Int =
         byteArrayOf(next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).int }
 
 private fun Iterator<Byte>.readLong(): Long =
         byteArrayOf(next(), next(), next(), next(), next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).long }
-
 
 private fun <T> Iterator<T>.drop(n: Int) {
     for (i in 0 until n) {
@@ -655,4 +652,3 @@ private fun columnSizeForType(type: Int, typeName: String?, length: Int): Int =
             else ->
                 length
         }
-

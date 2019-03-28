@@ -1,19 +1,19 @@
 plugins {
-	kotlin("jvm") version "1.3.21"
+    kotlin("jvm") version "1.3.21"
 }
 
 group = "com.canastic"
 version = "0.1.0-alpha"
 
 repositories {
-	jcenter()
+    jcenter()
 }
 
 dependencies {
-	implementation(kotlin("stdlib-jdk8"))
+    implementation(kotlin("stdlib-jdk8"))
 
-	compile(files("${System.getenv("INFORMIXDIR")}/jdbc/lib/ifxjdbc.jar"))
+    compile(files("${System.getenv("INFORMIXDIR")}/jdbc/lib/ifxjdbc.jar"))
 
-	testImplementation("org.jetbrains.kotlin:kotlin-test")
-	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+    testImplementation("org.jetbrains.kotlin:kotlin-test")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 }

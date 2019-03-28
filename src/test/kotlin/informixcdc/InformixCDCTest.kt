@@ -222,8 +222,8 @@ fun <R> useTestDatabase(block: (TestConnection) -> R): R {
 class TestConnection(conn: Connection, val database: String) : Connection by (conn)
 
 data class TestColumn<T>(
-        val type: String,
-        val setAndReturnExpected: (Int, PreparedStatement) -> T
+    val type: String,
+    val setAndReturnExpected: (Int, PreparedStatement) -> T
 )
 
 class TestTablesContext(conn: TestConnection, tables: List<List<TestColumn<*>>>) {
@@ -330,7 +330,7 @@ private fun TestTablesContext.testTruncate(conn: Connection, records: Iterator<R
 data class ColumnSetter(val column: String, val setter: (Int, PreparedStatement) -> Unit)
 
 private inline fun TestTablesContext.doAndGetExpected(
-        crossinline op: (String, List<ColumnSetter>) -> Unit
+    crossinline op: (String, List<ColumnSetter>) -> Unit
 ): HashMap<String, ArrayList<Any?>> {
     val expectedByTable = HashMap<String, ArrayList<Any?>>()
 
