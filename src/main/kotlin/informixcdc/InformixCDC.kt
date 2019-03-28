@@ -45,7 +45,7 @@ data class FullColumnsDescription(
 ) : ColumnsDescription()
 
 private fun FullColumnsDescription.fixedThenVariable(): List<String> =
-        fixed.map { (nameType, _) -> nameType.name } + variable.map { it.name }
+    fixed.map { (nameType, _) -> nameType.name } + variable.map { it.name }
 
 class Records(
     private val getConn: (String) -> Connection,
@@ -140,7 +140,7 @@ private fun loadSizes(getConn: (String) -> Connection, tables: List<TableDescrip
 }
 
 private fun SizedTable.fullName(): String =
-        "$database:$owner.$name"
+    "$database:$owner.$name"
 
 private fun Connection.fetchTableID(table: String): Int {
     return fetchOne("SELECT tabid FROM systables WHERE tabname = ?;") { row ->
@@ -213,14 +213,14 @@ private fun Connection.loadRecordTypes(): Map<Int, String> {
 }
 
 private fun Connection.makeGetCDCResult(errorCodes: Map<Int, CDCError>): (Connection).(String, PreparedStatement.() -> Unit) -> Int =
-        { sql, config ->
-            fetchOne(sql) { row ->
-                config(this)
-                row {
-                    errorCodes.maybeThrow(getInt(1))
-                }
+    { sql, config ->
+        fetchOne(sql) { row ->
+            config(this)
+            row {
+                errorCodes.maybeThrow(getInt(1))
             }
         }
+    }
 
 private fun Map<Int, CDCError>.maybeThrow(maybeErrorCode: Int): Int {
     if (maybeErrorCode >= 0) { // Not an error code.
@@ -310,89 +310,93 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
     bytes.drop(4) // Packet scheme
     val recordNumber = bytes.readInt()
 
-    return (when (types[recordNumber]) {
-        "BEGINTX" ->
-            BeginTx(
+    return (
+        when (types[recordNumber]) {
+            "BEGINTX" ->
+                BeginTx(
                     bytes.readLong(),
                     bytes.readInt(),
                     Instant.ofEpochSecond(bytes.readLong()),
                     bytes.readInt()
-            )
-        "COMMTX" ->
-            CommitTx(
+                )
+            "COMMTX" ->
+                CommitTx(
                     bytes.readLong(),
                     bytes.readInt(),
                     Instant.ofEpochSecond(bytes.readLong())
-            )
-        "RBTX" ->
-            RollbackTx(
+                )
+            "RBTX" ->
+                RollbackTx(
                     bytes.readLong(),
                     bytes.readInt()
-            )
-        "INSERT" -> {
-            decodeRowImage(bytes, payloadSize, ::Insert)
-        }
-        "DELETE" ->
-            decodeRowImage(bytes, payloadSize, ::Delete)
-
-        "UPDBEF" ->
-            decodeRowImage(bytes, payloadSize, ::BeforeUpdate)
-        "UPDAFT" ->
-            decodeRowImage(bytes, payloadSize, ::AfterUpdate)
-        "DISCARD" ->
-            Discard(
-                    bytes.readLong(),
-                    bytes.readInt()
-            )
-        "TRUNCATE" ->
-            decodeTableIDHeader(bytes).let { (seq, txID, table) ->
-                Truncate(seq, txID, table.name, table.database, table.owner)
+                )
+            "INSERT" -> {
+                decodeRowImage(bytes, payloadSize, ::Insert)
             }
-        "TABSCHEMA" -> {
-            val tableID = bytes.readInt()
-            bytes.drop(4) // Flags
-            bytes.drop(4) // Fixed-length size
-            val numFixed = bytes.readInt()
-            bytes.drop(4) // Variable-length columns
+            "DELETE" ->
+                decodeRowImage(bytes, payloadSize, ::Delete)
 
-            // We're only interested in the column order that TABSCHEMA reports, because that's the order in which
-            // other records will bring column values. So we rearrange the table entry in tablesByID.
-            //
-            // > Names of any fixed-length columns appear before names of any variable-length columns.
+            "UPDBEF" ->
+                decodeRowImage(bytes, payloadSize, ::BeforeUpdate)
+            "UPDAFT" ->
+                decodeRowImage(bytes, payloadSize, ::AfterUpdate)
+            "DISCARD" ->
+                Discard(
+                    bytes.readLong(),
+                    bytes.readInt()
+                )
+            "TRUNCATE" ->
+                decodeTableIDHeader(bytes).let { (seq, txID, table) ->
+                    Truncate(seq, txID, table.name, table.database, table.owner)
+                }
+            "TABSCHEMA" -> {
+                val tableID = bytes.readInt()
+                bytes.drop(4) // Flags
+                bytes.drop(4) // Fixed-length size
+                val numFixed = bytes.readInt()
+                bytes.drop(4) // Variable-length columns
 
-            val orderedColumns = bytes
-                    .take(payloadSize)
-                    .toString(Charset.forName("UTF-8"))
-                    .split(", ")
-                    .map { it.split(" ", limit = 1)[0] } // That should be the name
-            val fixedOrdered = orderedColumns.take(numFixed)
-            val variableOrdered = orderedColumns.drop(numFixed)
+                // We're only interested in the column order that TABSCHEMA reports, because that's the order in which
+                // other records will bring column values. So we rearrange the table entry in tablesByID.
+                //
+                // > Names of any fixed-length columns appear before names of any variable-length columns.
 
-            val table = tablesByID[tableID]
-                    ?: throw RuntimeException("got TABSCHEMA record for unexpected table ID: $tableID")
+                val orderedColumns =
+                    bytes
+                        .take(payloadSize)
+                        .toString(Charset.forName("UTF-8"))
+                        .split(", ")
+                        .map { it.split(" ", limit = 1)[0] } // That should be the name
+                val fixedOrdered = orderedColumns.take(numFixed)
+                val variableOrdered = orderedColumns.drop(numFixed)
 
-            // Rearrange columns in table entry by sorting them by their position in the corresponding ordered column
-            // list.
-            table.columns = FullColumnsDescription(
+                val table =
+                    tablesByID[tableID]
+                        ?: throw RuntimeException("got TABSCHEMA record for unexpected table ID: $tableID")
+
+                // Rearrange columns in table entry by sorting them by their position in the corresponding ordered column
+                // list.
+                table.columns = FullColumnsDescription(
                     table.columns.fixed.sortedBy { (it, _) -> fixedOrdered.indexOf(it.name) },
                     table.columns.variable.sortedBy { variableOrdered.indexOf(it.name) }
-            )
+                )
 
-            null
+                null
+            }
+            "TIMEOUT" -> {
+                throw CDCTimeout()
+            }
+            "ERROR" -> {
+                drop(4)
+                val code = bytes.readInt()
+                errorCodes.maybeThrow(code)
+                throw UnknownCDCErrorCode(code)
+            }
+            else -> {
+                throw RuntimeException("Unknown record type number: $recordNumber")
+            }
         }
-        "TIMEOUT" -> {
-            throw CDCTimeout()
-        }
-        "ERROR" -> {
-            drop(4)
-            val code = bytes.readInt()
-            errorCodes.maybeThrow(code)
-            throw UnknownCDCErrorCode(code)
-        }
-        else -> {
-            throw RuntimeException("Unknown record type number: $recordNumber")
-        }
-    })
+        )
 }
 
 private fun RecordsIterable.decodeRowImage(
@@ -426,19 +430,19 @@ private fun RecordsIterable.decodeRowImage(
 private data class TableIDHeader(val seq: Long, val txID: Int, val table: SizedTable)
 
 private fun RecordsIterable.decodeTableIDHeader(bytes: Iterator<Byte>): TableIDHeader = TableIDHeader(
-        bytes.readLong(),
-        bytes.readInt(),
-        bytes.readInt().let { tableID ->
-            tablesByID[tableID]
-                    ?: throw RuntimeException("retrieved record for unknown table ID $tableID")
-        }
+    bytes.readLong(),
+    bytes.readInt(),
+    bytes.readInt().let { tableID ->
+        tablesByID[tableID]
+            ?: throw RuntimeException("retrieved record for unknown table ID $tableID")
+    }
 )
 
 private fun Iterator<Byte>.readInt(): Int =
-        byteArrayOf(next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).int }
+    byteArrayOf(next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).int }
 
 private fun Iterator<Byte>.readLong(): Long =
-        byteArrayOf(next(), next(), next(), next(), next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).long }
+    byteArrayOf(next(), next(), next(), next(), next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).long }
 
 private fun <T> Iterator<T>.drop(n: Int) {
     for (i in 0 until n) {
@@ -457,105 +461,105 @@ private fun Iterator<Byte>.take(n: Int): ByteArray {
 class ColumnValue(val raw: ByteArray, internal val decoder: (ByteArray) -> Any?)
 
 fun ColumnValue.decode(): Any? =
-        decoder(raw)
+    decoder(raw)
 
 private fun decoderForType(type: Int, name: String?, length: Int): (ByteArray) -> Any? =
-        when (type.toShort()) {
-            IFX_TYPE_DATETIME ->
-                // IfxTypes.FromIfxTypeToJava doesn't seem to work for this one!
-                dateTimeDecoder(length) as (ByteArray) -> Any?
-            IFX_TYPE_BIGINT,
-            IFX_TYPE_BIGSERIAL -> { raw ->
+    when (type.toShort()) {
+        IFX_TYPE_DATETIME ->
+            // IfxTypes.FromIfxTypeToJava doesn't seem to work for this one!
+            dateTimeDecoder(length) as (ByteArray) -> Any?
+        IFX_TYPE_BIGINT,
+        IFX_TYPE_BIGSERIAL -> { raw ->
+            when {
+                raw.isNullInt() -> null
+                else -> IfxToJavaType.IfxToJavaLongBigInt(raw)
+            }
+        }
+        IFX_TYPE_INT8 -> { raw ->
+            when {
+                Pair(raw[0], raw[1]) == Pair(0.toByte(), 0.toByte()) -> null
+                else -> IfxToJavaType.IfxToJavaLongInt(raw)
+            }
+        }
+        IFX_TYPE_VARCHAR,
+        IFX_TYPE_NVCHAR -> { raw ->
+            // First byte is length.
+            when {
+                Pair(raw[0], raw[1]) == Pair(1.toByte(), 0.toByte()) -> null
+                else -> IfxToJavaType.IfxToJavaChar(raw, 1, raw.count() - 1, null, false)
+            }
+        }
+        IFX_TYPE_UDTVAR -> when (name) {
+            "lvarchar" -> { raw ->
                 when {
-                    raw.isNullInt() -> null
-                    else -> IfxToJavaType.IfxToJavaLongBigInt(raw)
+                    Pair(raw[1], raw[2]) == Pair(1.toByte(), 1.toByte()) -> null
+                    // First bytes: [0, length, 0]
+                    else -> IfxToJavaType.IfxToJavaChar(raw, 3, raw.count() - 3, null, false)
                 }
-            }
-            IFX_TYPE_INT8 -> { raw ->
-                when {
-                    Pair(raw[0], raw[1]) == Pair(0.toByte(), 0.toByte()) -> null
-                    else -> IfxToJavaType.IfxToJavaLongInt(raw)
-                }
-            }
-            IFX_TYPE_VARCHAR,
-            IFX_TYPE_NVCHAR -> { raw ->
-                // First byte is length.
-                when {
-                    Pair(raw[0], raw[1]) == Pair(1.toByte(), 0.toByte()) -> null
-                    else -> IfxToJavaType.IfxToJavaChar(raw, 1, raw.count() - 1, null, false)
-                }
-            }
-            IFX_TYPE_UDTVAR -> when (name) {
-                "lvarchar" -> { raw ->
-                    when {
-                        Pair(raw[1], raw[2]) == Pair(1.toByte(), 1.toByte()) -> null
-                        // First bytes: [0, length, 0]
-                        else -> IfxToJavaType.IfxToJavaChar(raw, 3, raw.count() - 3, null, false)
-                    }
-                }
-                else ->
-                    { raw -> raw }
-            }
-            IFX_TYPE_UDTFIXED -> when (name) {
-                "boolean" -> { raw ->
-                    when {
-                        raw[0] == 1.toByte() -> null
-                        else -> IfxToJavaType.IfxToJavaSmallInt(raw) == 1.toShort()
-                    }
-                }
-                else ->
-                    { raw -> raw }
             }
             else ->
-                when (IfxTypes.FromIfxTypeToJava(type)) {
-                    "com.informix.lang.Interval" -> { raw ->
-                        IfxToJavaType.IfxToJavaInterval(raw, (length shr 8).toShort())
-                    }
-                    "java.lang.Double" -> { raw ->
-                        when {
-                            raw.all { it == 0xFF.toByte() } -> null
-                            else -> IfxToJavaType.IfxToJavaDouble(raw)
-                        }
-                    }
-                    "java.lang.Float" -> { raw ->
-                        when {
-                            raw.all { it == 0xFF.toByte() } -> null
-                            else -> IfxToJavaType.IfxToJavaReal(raw)
-                        }
-                    }
-                    "java.lang.Integer" -> { raw ->
-                        when {
-                            raw.isNullInt() -> null
-                            else -> IfxToJavaType.IfxToJavaInt(raw)
-                        }
-                    }
-                    "java.lang.Short" -> { raw ->
-                        when {
-                            raw.isNullInt() -> null
-                            else -> IfxToJavaType.IfxToJavaSmallInt(raw)
-                        }
-                    }
-                    "java.lang.String" -> { raw ->
-                        when {
-                            raw[0] == 0.toByte() -> null
-                            else -> IfxToJavaType().IfxToJavaChar(raw, false)
-                        }
-                    }
-                    "java.math.BigDecimal" -> { raw ->
-                        when {
-                            raw[0] == 0.toByte() -> null
-                            else -> IfxToJavaType.IfxToJavaDecimal(raw, raw.size.toShort())
-                        }
-                    }
-                    "java.sql.Date" -> { raw ->
-                        IfxToJavaType.IfxToJavaDate(raw)
-                    }
-                    else -> { raw -> raw }
-                }
+                { raw -> raw }
         }
+        IFX_TYPE_UDTFIXED -> when (name) {
+            "boolean" -> { raw ->
+                when {
+                    raw[0] == 1.toByte() -> null
+                    else -> IfxToJavaType.IfxToJavaSmallInt(raw) == 1.toShort()
+                }
+            }
+            else ->
+                { raw -> raw }
+        }
+        else ->
+            when (IfxTypes.FromIfxTypeToJava(type)) {
+                "com.informix.lang.Interval" -> { raw ->
+                    IfxToJavaType.IfxToJavaInterval(raw, (length shr 8).toShort())
+                }
+                "java.lang.Double" -> { raw ->
+                    when {
+                        raw.all { it == 0xFF.toByte() } -> null
+                        else -> IfxToJavaType.IfxToJavaDouble(raw)
+                    }
+                }
+                "java.lang.Float" -> { raw ->
+                    when {
+                        raw.all { it == 0xFF.toByte() } -> null
+                        else -> IfxToJavaType.IfxToJavaReal(raw)
+                    }
+                }
+                "java.lang.Integer" -> { raw ->
+                    when {
+                        raw.isNullInt() -> null
+                        else -> IfxToJavaType.IfxToJavaInt(raw)
+                    }
+                }
+                "java.lang.Short" -> { raw ->
+                    when {
+                        raw.isNullInt() -> null
+                        else -> IfxToJavaType.IfxToJavaSmallInt(raw)
+                    }
+                }
+                "java.lang.String" -> { raw ->
+                    when {
+                        raw[0] == 0.toByte() -> null
+                        else -> IfxToJavaType().IfxToJavaChar(raw, false)
+                    }
+                }
+                "java.math.BigDecimal" -> { raw ->
+                    when {
+                        raw[0] == 0.toByte() -> null
+                        else -> IfxToJavaType.IfxToJavaDecimal(raw, raw.size.toShort())
+                    }
+                }
+                "java.sql.Date" -> { raw ->
+                    IfxToJavaType.IfxToJavaDate(raw)
+                }
+                else -> { raw -> raw }
+            }
+    }
 
 private fun ByteArray.isNullInt(): Boolean =
-        this[0] == (-128).toByte() && this.drop(1).all { it == 0.toByte() }
+    this[0] == (-128).toByte() && this.drop(1).all { it == 0.toByte() }
 
 private fun dateTimeDecoder(collengthFromSyscolumns: Int): (ByteArray) -> java.sql.Timestamp? {
     // A date like
@@ -606,49 +610,49 @@ private fun dateTimeDecoder(collengthFromSyscolumns: Int): (ByteArray) -> java.s
             }
         }.iterator()
         return java.sql.Timestamp(
-                components.next() * 100 + components.next(),
-                components.next().let {
-                    when (it) {
-                        0 -> 1 // Default: January
-                        else -> it
-                    }
-                },
-                components.next().let {
-                    when (it) {
-                        0 -> 1 // No day 0
-                        else -> it
-                    }
-                },
-                components.next(),
-                components.next(),
-                components.next(),
-                components.next() * 1000 * 100 * 100 + components.next() * 1000 * 100 + components.next() * 1000
+            components.next() * 100 + components.next(),
+            components.next().let {
+                when (it) {
+                    0 -> 1 // Default: January
+                    else -> it
+                }
+            },
+            components.next().let {
+                when (it) {
+                    0 -> 1 // No day 0
+                    else -> it
+                }
+            },
+            components.next(),
+            components.next(),
+            components.next(),
+            components.next() * 1000 * 100 * 100 + components.next() * 1000 * 100 + components.next() * 1000
         )
     }
 }
 
 private fun columnSizeForType(type: Int, typeName: String?, length: Int): Int =
-        when (type.toShort()) {
-            IFX_TYPE_DATETIME,
-            IFX_TYPE_INTERVAL
-            ->
-                // First 8 bits encode qualifiers which we don't care about.
-                (length shr 8) / 2 + (length shr 8) % 2 + 1
-            IFX_TYPE_DECIMAL,
-            IFX_TYPE_MONEY
-            -> {
-                val scale = (length and 0xFF)
-                val isScaled = scale != 255
-                val digits = length shr 8
-                digits / 2 + // 2 bytes per character
-                        digits % 2 +
-                        1 + // Sign?
-                        (if (!isScaled || (digits % 2 == 0 && scale % 2 != 0)) 1 else 0) // ??????
-            }
-            IFX_TYPE_UDTFIXED -> when (typeName) {
-                "boolean" -> 2
-                else -> length
-            }
-            else ->
-                length
+    when (type.toShort()) {
+        IFX_TYPE_DATETIME,
+        IFX_TYPE_INTERVAL
+        ->
+            // First 8 bits encode qualifiers which we don't care about.
+            (length shr 8) / 2 + (length shr 8) % 2 + 1
+        IFX_TYPE_DECIMAL,
+        IFX_TYPE_MONEY
+        -> {
+            val scale = (length and 0xFF)
+            val isScaled = scale != 255
+            val digits = length shr 8
+            digits / 2 + // 2 bytes per character
+                digits % 2 +
+                1 + // Sign?
+                (if (!isScaled || (digits % 2 == 0 && scale % 2 != 0)) 1 else 0) // ??????
         }
+        IFX_TYPE_UDTFIXED -> when (typeName) {
+            "boolean" -> 2
+            else -> length
+        }
+        else ->
+            length
+    }

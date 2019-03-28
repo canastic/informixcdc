@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+before=$(git diff --name-only)
+
+for file in $(git diff --cached --name-only | grep -e '\.kt$'); do
+	ktlint --experimental -F "$file" &
+done
+wait
+
+after=$(git diff --name-only)
+
+changed=0
+for file in $(diff <(echo "$before") <(echo "$after") | grep -e '\.kt$' | cut -b3-); do
+	echo "Reformatted: $file"
+	changed=1
+done
+
+exit "$changed"
