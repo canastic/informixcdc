@@ -258,7 +258,7 @@ private fun <T> Connection.fetchOne(sql: String, config: PreparedStatement.((Res
 }
 
 private fun Connection.recordBytes(sessionID: Long): Iterable<Byte> {
-    val buffer = ByteArray(1024)
+    val buffer = ByteArray(4096)
     val blob = IfxSmartBlob(this)
 
     return Iterable {
