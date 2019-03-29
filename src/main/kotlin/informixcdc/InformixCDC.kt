@@ -307,93 +307,91 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
     bytes.drop(4) // Packet scheme
     val recordNumber = bytes.readInt()
 
-    return (
-        when (types[recordNumber]) {
-            "BEGINTX" ->
-                BeginTx(
-                    bytes.readLong(),
-                    bytes.readInt(),
-                    Instant.ofEpochSecond(bytes.readLong()),
-                    bytes.readInt()
-                )
-            "COMMTX" ->
-                CommitTx(
-                    bytes.readLong(),
-                    bytes.readInt(),
-                    Instant.ofEpochSecond(bytes.readLong())
-                )
-            "RBTX" ->
-                RollbackTx(
-                    bytes.readLong(),
-                    bytes.readInt()
-                )
-            "INSERT" -> {
-                decodeRowImage(bytes, payloadSize, ::Insert)
-            }
-            "DELETE" ->
-                decodeRowImage(bytes, payloadSize, ::Delete)
-
-            "UPDBEF" ->
-                decodeRowImage(bytes, payloadSize, ::BeforeUpdate)
-            "UPDAFT" ->
-                decodeRowImage(bytes, payloadSize, ::AfterUpdate)
-            "DISCARD" ->
-                Discard(
-                    bytes.readLong(),
-                    bytes.readInt()
-                )
-            "TRUNCATE" ->
-                decodeTableIDHeader(bytes).let { (seq, txID, table) ->
-                    Truncate(seq, txID, table.name, table.database, table.owner)
-                }
-            "TABSCHEMA" -> {
-                val tableID = bytes.readInt()
-                bytes.drop(4) // Flags
-                bytes.drop(4) // Fixed-length size
-                val numFixed = bytes.readInt()
-                bytes.drop(4) // Variable-length columns
-
-                // We're only interested in the column order that TABSCHEMA reports, because that's the order in which
-                // other records will bring column values. So we rearrange the table entry in tablesByID.
-                //
-                // > Names of any fixed-length columns appear before names of any variable-length columns.
-
-                val orderedColumns =
-                    bytes
-                        .take(payloadSize)
-                        .toString(Charset.forName("UTF-8"))
-                        .split(", ")
-                        .map { it.split(" ", limit = 1)[0] } // That should be the name
-                val fixedOrdered = orderedColumns.take(numFixed)
-                val variableOrdered = orderedColumns.drop(numFixed)
-
-                val table =
-                    tablesByID[tableID]
-                        ?: throw RuntimeException("got TABSCHEMA record for unexpected table ID: $tableID")
-
-                // Rearrange columns in table entry by sorting them by their position in the corresponding ordered column
-                // list.
-                table.columns = FullColumnsDescription(
-                    table.columns.fixed.sortedBy { (it, _) -> fixedOrdered.indexOf(it.name) },
-                    table.columns.variable.sortedBy { variableOrdered.indexOf(it.name) }
-                )
-
-                null
-            }
-            "TIMEOUT" -> {
-                throw CDCTimeout()
-            }
-            "ERROR" -> {
-                drop(4)
-                val code = bytes.readInt()
-                errorCodes.maybeThrow(code)
-                throw UnknownCDCErrorCode(code)
-            }
-            else -> {
-                throw RuntimeException("Unknown record type number: $recordNumber")
-            }
+    return when (types[recordNumber]) {
+        "BEGINTX" ->
+            BeginTx(
+                bytes.readLong(),
+                bytes.readInt(),
+                Instant.ofEpochSecond(bytes.readLong()),
+                bytes.readInt()
+            )
+        "COMMTX" ->
+            CommitTx(
+                bytes.readLong(),
+                bytes.readInt(),
+                Instant.ofEpochSecond(bytes.readLong())
+            )
+        "RBTX" ->
+            RollbackTx(
+                bytes.readLong(),
+                bytes.readInt()
+            )
+        "INSERT" -> {
+            decodeRowImage(bytes, payloadSize, ::Insert)
         }
-        )
+        "DELETE" ->
+            decodeRowImage(bytes, payloadSize, ::Delete)
+
+        "UPDBEF" ->
+            decodeRowImage(bytes, payloadSize, ::BeforeUpdate)
+        "UPDAFT" ->
+            decodeRowImage(bytes, payloadSize, ::AfterUpdate)
+        "DISCARD" ->
+            Discard(
+                bytes.readLong(),
+                bytes.readInt()
+            )
+        "TRUNCATE" ->
+            decodeTableIDHeader(bytes).let { (seq, txID, table) ->
+                Truncate(seq, txID, table.name, table.database, table.owner)
+            }
+        "TABSCHEMA" -> {
+            val tableID = bytes.readInt()
+            bytes.drop(4) // Flags
+            bytes.drop(4) // Fixed-length size
+            val numFixed = bytes.readInt()
+            bytes.drop(4) // Variable-length columns
+
+            // We're only interested in the column order that TABSCHEMA reports, because that's the order in which
+            // other records will bring column values. So we rearrange the table entry in tablesByID.
+            //
+            // > Names of any fixed-length columns appear before names of any variable-length columns.
+
+            val orderedColumns =
+                bytes
+                    .take(payloadSize)
+                    .toString(Charset.forName("UTF-8"))
+                    .split(", ")
+                    .map { it.split(" ", limit = 1)[0] } // That should be the name
+            val fixedOrdered = orderedColumns.take(numFixed)
+            val variableOrdered = orderedColumns.drop(numFixed)
+
+            val table =
+                tablesByID[tableID]
+                    ?: throw RuntimeException("got TABSCHEMA record for unexpected table ID: $tableID")
+
+            // Rearrange columns in table entry by sorting them by their position in the corresponding ordered column
+            // list.
+            table.columns = FullColumnsDescription(
+                table.columns.fixed.sortedBy { (it, _) -> fixedOrdered.indexOf(it.name) },
+                table.columns.variable.sortedBy { variableOrdered.indexOf(it.name) }
+            )
+
+            null
+        }
+        "TIMEOUT" -> {
+            throw CDCTimeout()
+        }
+        "ERROR" -> {
+            drop(4)
+            val code = bytes.readInt()
+            errorCodes.maybeThrow(code)
+            throw UnknownCDCErrorCode(code)
+        }
+        else -> {
+            throw RuntimeException("Unknown record type number: $recordNumber")
+        }
+    }
 }
 
 private fun RecordsIterable.decodeRowImage(
@@ -464,7 +462,7 @@ private fun decoderForType(type: Int, name: String?, length: Int): (ByteArray) -
     when (type.toShort()) {
         IFX_TYPE_DATETIME ->
             // IfxTypes.FromIfxTypeToJava doesn't seem to work for this one!
-            dateTimeDecoder(length) as (ByteArray) -> Any?
+            dateTimeDecoder(length)
         IFX_TYPE_BIGINT,
         IFX_TYPE_BIGSERIAL -> { raw ->
             when {

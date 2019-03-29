@@ -255,12 +255,12 @@ fun testTables(conn: TestConnection, tables: List<List<TestColumn<*>>>) {
         }
     ).use { records ->
         getConn(conn.database).use { conn ->
-            val records = records.iterator()
+            val iter = records.iterator()
 
-            val expectedByTable = context.testInsert(conn, records)
-            context.testUpdate(conn, records)
-            context.testDelete(conn, records, expectedByTable)
-            context.testTruncate(conn, records)
+            val expectedByTable = context.testInsert(conn, iter)
+            context.testUpdate(conn, iter)
+            context.testDelete(conn, iter, expectedByTable)
+            context.testTruncate(conn, iter)
 
             // TODO: Serial
             // TODO: Rollback, discard
@@ -342,8 +342,8 @@ private inline fun TestTablesContext.doAndGetExpected(
             op(
                 table,
                 columns.withIndex().map { (i, column) ->
-                    ColumnSetter(columnName(i)) { i, stmt ->
-                        expected.add(column.setAndReturnExpected(i, stmt))
+                    ColumnSetter(columnName(i)) { paramIdx, stmt ->
+                        expected.add(column.setAndReturnExpected(paramIdx, stmt))
                     }
                 }
             )
