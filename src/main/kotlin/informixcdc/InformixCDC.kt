@@ -96,15 +96,12 @@ class Records(
             setLong(2, fromSeq ?: 0)
         }
 
-        val cdcCloser = AutoCloseable {
-            // TODO: This is terribly slow in tests! Figure out why.
-//            conn.getCDCResult("EXECUTE FUNCTION cdc_closesess(?);") {
-//                setLong(1, sessionID)
-//            }
-        }
-
         return conn.use {
-            cdcCloser.use {
+            AutoCloseable {
+                conn.getCDCResult("EXECUTE FUNCTION cdc_closesess(?);") {
+                    setLong(1, sessionID)
+                }
+            }.use {
                 block(RecordsIterable(conn.recordBytes(sessionID), recordTypes, errorCodes, tablesByID))
             }
         }
