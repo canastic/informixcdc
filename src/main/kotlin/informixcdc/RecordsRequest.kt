@@ -5,13 +5,16 @@ package informixcdc
 import com.beust.klaxon.Json
 import com.beust.klaxon.Klaxon
 import com.beust.klaxon.Converter
+import com.beust.klaxon.JsonValue
+import com.beust.klaxon.JsonObject
+import com.beust.klaxon.KlaxonException
 
 private val converters = ArrayList<(Klaxon) -> Converter>()
 
 class RecordsRequest(
     @Json(name = "from_seq")
     val fromSeq: Long?,
-
+    
     @Json(name = "tables")
     val tables: List<TablesElement>
 ) {
@@ -19,20 +22,20 @@ class RecordsRequest(
     class TablesElement(
         @Json(name = "name")
         val name: String,
-
+        
         @Json(name = "database")
         val database: String,
-
+        
         @Json(name = "owner")
         val owner: String,
-
+        
         @Json(name = "columns")
         val columns: List<String>?
     ) {
-
+    
         companion object
     }
-
+    
     companion object
 }
 

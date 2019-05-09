@@ -329,11 +329,11 @@ private fun TestTablesContext.testInsert(
     val expectedByTable = doAndGetExpected(conn::insert)
 
     (0 until columnsByTable.count()).forEach {
-        assertTrue(records.next() is BeginTx)
+        assertTrue(records.next() is Record.BeginTx)
 
-        assertExpected(records.next() as Insert, expectedByTable)
+        assertExpected(records.next() as Record.RowImage.Insert, expectedByTable)
 
-        assertTrue(records.next() is CommitTx)
+        assertTrue(records.next() is Record.CommitTx)
     }
 
     return expectedByTable
@@ -343,12 +343,12 @@ private fun TestTablesContext.testUpdate(conn: Connection, records: Iterator<Rec
     val expectedByTable = doAndGetExpected(conn::update)
 
     (0 until columnsByTable.count()).forEach {
-        assertTrue(records.next() is BeginTx)
+        assertTrue(records.next() is Record.BeginTx)
 
-        assertExpected(records.next() as BeforeUpdate, expectedByTable)
-        assertExpected(records.next() as AfterUpdate, expectedByTable)
+        assertExpected(records.next() as Record.RowImage.BeforeUpdate, expectedByTable)
+        assertExpected(records.next() as Record.RowImage.AfterUpdate, expectedByTable)
 
-        assertTrue(records.next() is CommitTx)
+        assertTrue(records.next() is Record.CommitTx)
     }
 }
 
@@ -362,11 +362,11 @@ private fun TestTablesContext.testDelete(
     }
 
     (0 until expectedByTable.count()).forEach {
-        assertTrue(records.next() is BeginTx)
+        assertTrue(records.next() is Record.BeginTx)
 
-        assertExpected(records.next() as Delete, expectedByTable)
+        assertExpected(records.next() as Record.RowImage.Delete, expectedByTable)
 
-        assertTrue(records.next() is CommitTx)
+        assertTrue(records.next() is Record.CommitTx)
     }
 }
 
@@ -378,12 +378,12 @@ private fun TestTablesContext.testTruncate(conn: Connection, records: Iterator<R
     }
 
     (0 until expected.count()).forEach {
-        assertTrue(records.next() is BeginTx)
+        assertTrue(records.next() is Record.BeginTx)
 
-        val truncate = records.next() as Truncate
+        val truncate = records.next() as Record.Truncate
         assertTrue(expected.remove(truncate.table), "table: ${truncate.table}")
 
-        assertTrue(records.next() is CommitTx)
+        assertTrue(records.next() is Record.CommitTx)
     }
 
     assertTrue(expected.isEmpty(), "left: ${expected.toList()}")
@@ -413,7 +413,7 @@ private inline fun TestTablesContext.doAndGetExpected(
     return expectedByTable
 }
 
-private fun TestTablesContext.assertExpected(row: RowImage, expectedByTable: HashMap<String, ArrayList<Any?>>) {
+private fun TestTablesContext.assertExpected(row: Record.RowImage, expectedByTable: HashMap<String, ArrayList<Any?>>) {
     val columns = columnsByTable[row.table]!!
 
     testContext("table: ${row.table}") {
@@ -426,7 +426,7 @@ private fun TestTablesContext.assertExpected(row: RowImage, expectedByTable: Has
             val colName = "c$i"
             testContext("column: $colName ${columns[i]}") {
                 val got = gotRow[colName]!!
-                assertEquals(expected, got.decode(), "column: $colName ${columns[i]}")
+                assertEquals(expected, got.decoded, "column: $colName ${columns[i]}")
             }
         }
     }

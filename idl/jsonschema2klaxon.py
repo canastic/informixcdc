@@ -22,9 +22,9 @@ class UnionByType(Union):
         self.variants = variants
 
 class UnionByField(Union):
-    def __init__(self, name, properties, inner_types, discriminant, variants, parent=None, embed_ref=None):
+    def __init__(self, name, properties, inner_types, discriminant_json, variants, parent=None, embed_ref=None):
         super().__init__(name, properties, inner_types, parent=parent, embed_ref=embed_ref, sealed=True)
-        self.discriminant = discriminant
+        self.discriminant_json = discriminant_json
         # [(<discriminant field value>, <variant class name>)]
         self.variants = variants
 
@@ -57,16 +57,41 @@ def extract(schema, name):
         if class_name is not None:
             return class_name, []
         if type_ == "object":
+            if "properties" not in schema:
+                name = extract_directive(schema, "value_name") or f"{name}Value"
+                name, types = extract(schema.get("additionalProperties", {}), name)
+                return f"Map<String, {name}>", types
             properties, inner_types, embed_ref = extract_object(schema)
             return name, [Class(name, properties, inner_types, embed_ref=embed_ref)]
         if type_ == "array":
             items_schema = schema.get("items", {})
-            name, types = extract(items_schema, f"{name}Element")
+            name = extract_directive(schema, "element_name") or f"{name}Element"
+            name, types = extract(items_schema, name)
             return f"List<{name}>", types
         assert(False)
 
     if "enum" in schema and all(isinstance(x, str) for x in schema["enum"]):
         return name, [Enum(name, schema["enum"])]
+
+    if (
+        "allOf" in schema
+        and len(schema["allOf"]) == 2
+        and len([sub for sub in schema["allOf"] if sub.get("type") == "object"]) == 1
+        and len([sub for sub in schema["allOf"] if "oneOf" in sub]) == 1
+    ):
+        subs = schema["allOf"]
+        common_fields_schema = [sub for sub in subs if sub.get("type") == "object"][0]
+        variants_schema = [sub for sub in subs if "oneOf" in sub][0]["oneOf"]
+
+        name, union = extract_oneof(variants_schema, name)
+        union = union[0]
+
+        _, fields_class = extract(common_fields_schema, name)
+        fields_class = fields_class[0]
+        union.properties = fields_class.properties
+        union.inner_types += fields_class.inner_types
+
+        return name, [union]
 
     return "Any?", []
 
@@ -173,7 +198,7 @@ def extract_oneof_discriminant_field(schemas, name):
     
     variants = []
     variants_by_tag = []
-    parent = UnionByField(name, [], variants, discriminant_name, variants_by_tag)
+    parent = UnionByField(name, [], variants, discriminant_json_name, variants_by_tag)
 
     for tag_values, schema in discriminant_variants:
         properties, inner_types, embed_ref = extract_object(schema)
@@ -224,7 +249,7 @@ def extract_oneof_discriminant_field(schemas, name):
                 variant_properties,
                 variant_inner_types,
                 parent=variant_parent,
-                embed_ref=variant_embed_ref
+                embed_ref=variant_embed_ref,
             )
             add_variant_to.append(variant)
 
@@ -390,34 +415,35 @@ class Emitter:
         if c.sealed:
             printer.print("sealed ")
 
-        printer.print(f"class {c.name}(")
+        printer.print(f"class {c.name}")
 
-        constructor_args = []
-        if len(properties) > 0:
-            constructor_args += [(p, 'field') for p in properties]
-        if c.parent is not None and len(c.parent.properties) > 0:
-            constructor_args += [(p, 'arg') for p in c.parent.properties]
+        if not c.sealed:
+            printer.print("(")
+            constructor_args = []
 
-        if len(constructor_args) > 0:
-            self.emit_properties(constructor_args, printer.indent())
-            printer.print("\n")
+            parents = []
+            parent = c.parent
+            while parent is not None:
+                parents.insert(0, parent)
+                parent = parent.parent
+            for parent in parents:
+                if len(parent.properties) > 0:
+                    constructor_args += [(p, 'field_override') for p in parent.properties]
+            if len(properties) > 0:
+                constructor_args += [(p, 'field') for p in properties]
 
-        printer.print(")")
-
-        if c.parent is not None:
-            printer.print(f" : {c.parent.name}(")
-
-            if len(c.parent.properties) > 0:
-                self.emit_properties(
-                    [(p, 'ref') for p in c.parent.properties],
-                    printer.indent()
-                )
+            if len(constructor_args) > 0:
+                self.emit_properties(constructor_args, printer.indent())
                 printer.print("\n")
-
             printer.print(")")
 
-        printer.print(" {\n    ")
+        if c.parent is not None:
+            printer.print(f" : {c.parent.name}()")
 
+        printer.print(" {\n")
+
+        if c.sealed:
+            self.emit_properties([(p, 'abstract') for p in properties], printer.indent(), True)
         self.emit_declarations(inner_types, printer.indent())
 
         printer.print("\n    companion object")
@@ -432,13 +458,42 @@ class Emitter:
         printer.print("            converters.add(this::converter)\n")
         printer.print("        }\n")
         print("")
+
+        # TODO: The 'enabled' thing is extremely hacky.
+        #
+        # We're using it to use a single converter for all classes in a union.
+        #
+        # When we convert from JSON, we decode to an abstract, sealed class, and
+        # return a concrete class instance. But when we encode to JSON, we do
+        # the opposite: we take an instance of the abstract class, then cast it
+        # to the concrete class in order to encode that. This means that
+        # canConvert needs to return true for the abstract class and its
+        # subclasses, not just the abstract class.
+        #
+        # But because of this, as soon as we recursively call
+        # klaxon.fromJsonObject or klaxon.toJsonString, we go into a loop, since
+        # the converter gets invoked again for the concrete class, which
+        # canConvert still recognizes. 
+        #
+        # So before recurring, we just disable the converter, so that Klaxon
+        # uses the default converter for this class and its subclasses.
+        #
+        # This will break recursive types.
+        #
+        # The right solution would be to declare converters in all subclasses.
+        # Those would only implement toJson, while the abstract class converter
+        # would only implement fromJson. (Well, actually, Klaxon forces us to
+        # implement both. It's one of the various ways its API is bad.)
+
         printer.print("        fun converter(klaxon: Klaxon) = object : Converter {\n")
+        printer.print("             var enabled = true\n")
+        printer.print("\n")
         printer.print(f"            override fun canConvert(cls: Class<*>): Boolean =\n")
-        printer.print(f"                cls == {c.name}::class.java\n")
+        printer.print(f"                enabled && {c.name}::class.java.isAssignableFrom(cls)\n")
         print("")
 
         if isinstance(c, UnionByType):
-            printer.print("            override fun fromJson(jv: JsonValue): Any? = when {\n")
+            printer.print("            override fun fromJson(jv: JsonValue): Any? = try { enabled = false; when {\n")
 
             for json_type, variant_class in c.variants:
                 if json_type == "object":
@@ -461,9 +516,9 @@ class Emitter:
 
             printer.print(f"                else ->\n")
             printer.print(f"                    throw KlaxonException(\"value with unexpected JSON type: $jv\")\n")
-            printer.print("            }\n")
+            printer.print("            } } finally { enabled = true }\n")
             print("")
-            printer.print(f"            override fun toJson(value: Any): String = when (value as {c.name}) " + "{\n")
+            printer.print(f"            override fun toJson(value: Any): String = " + "try { enabled = false; " + f" when (value as {c.name}) " + "{\n")
 
             for json_type, variant_class in c.variants:
                 printer.print(f"                is {variant_class} ->\n")
@@ -471,11 +526,11 @@ class Emitter:
                     printer.print(f"                        klaxon.toJsonString(value as {variant_class})\n")
                 else:
                     printer.print(f"                        klaxon.toJsonString((value as {variant_class}).value)\n")
-            printer.print("            }\n")
+            printer.print("            } } finally { enabled = true }\n")
 
         elif isinstance(c, UnionByField):
-            printer.print(f"            override fun fromJson(jv: JsonValue): Any? = jv.obj!![\"{c.discriminant}\"].let " + "{ v ->\n")
-            printer.print("                when {\n")
+            printer.print(f"            override fun fromJson(jv: JsonValue): Any? = jv.obj!![\"{c.discriminant_json}\"].let " + "{ v ->\n")
+            printer.print("                try { enabled = false; when {\n")
 
             for tag_value, variant_class in c.variants:
                 kotlin_comparison = None
@@ -491,16 +546,17 @@ class Emitter:
                 printer.print(f"                        klaxon.fromJsonObject(jv.obj!!, {variant_class}::class.java, {variant_class}::class)\n")
 
             printer.print(f"                    else ->\n")
-            printer.print(f"                        throw KlaxonException(\"value with unexpected value in field \\\"{c.discriminant}\\\": $jv\")\n")
-            printer.print("                }\n")
+            printer.print(f"                        throw KlaxonException(\"value with unexpected value in field \\\"{c.discriminant_json}\\\": $jv\")\n")
+            printer.print("                } } finally { enabled = true }\n")
             printer.print("            }\n")
             print("")
-            printer.print(f"            override fun toJson(value: Any): String = when (value as {c.name}) " + "{\n")
+            printer.print(f"            override fun toJson(value: Any): String = " + "try { enabled = false; " + f"when (value as {c.name}) " + "{\n")
 
-            for _, variant_class in c.variants:
+            for enum_value, variant_class in c.variants:
                 printer.print(f"                is {variant_class} ->\n")
-                printer.print(f"                        klaxon.toJsonString(value as {variant_class})\n")
-            printer.print("            }\n")
+                printer.print(f"                        klaxon.toJsonString(value as {variant_class}).dropLast(1) + ")
+                printer.print('",\\"' + c.discriminant_json + '\\":\\"' + enum_value + '\\"}"\n')
+            printer.print("           } } finally { enabled = true }\n")
 
         else:
             assert(False)
@@ -519,27 +575,33 @@ class Emitter:
             inner_types += ref_inner_types
         return properties, inner_types
 
-    def emit_properties(self, properties, printer):
+    def emit_properties(self, properties, printer, abstract=False):
         first = True
         for p, format in properties:
             if not first:
-                printer.print(",\n")
+                if not abstract:
+                    printer.print(",")
+                printer.print("\n")
             first = False
 
-            if format == "field":
+            is_field = format == "field" or format == "field_override"
+            if is_field:
                 printer.print(f"\n@Json(name = \"{p.json_name}\")")
 
             printer.print("\n")
 
-            if format == "field":
+            if format == "field_override":
+                printer.print("override ")
+            if abstract:
+                printer.print("abstract ")
+            if is_field or abstract:
                 printer.print("val ")
 
             printer.print(f"{p.kt_name}")
 
-            if format in ("arg", "field"):
-                printer.print(f": {p.type}")
-                if p.default is not None:
-                    printer.print(f" = {p.default}")
+            printer.print(f": {p.type}")
+            if p.default is not None:
+                printer.print(f" = {p.default}")
 
 import sys
 import json

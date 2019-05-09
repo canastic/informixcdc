@@ -1,5 +1,6 @@
 package informixcdc
 
+import com.informix.jdbc.IfxConnection
 import com.informix.jdbc.IfxSmartBlob
 import com.informix.lang.IfxToJavaType
 import com.informix.lang.IfxTypes
@@ -15,15 +16,23 @@ import com.informix.lang.IfxTypes.IFX_TYPE_NVCHAR
 import com.informix.lang.IfxTypes.IFX_TYPE_UDTFIXED
 import com.informix.lang.IfxTypes.IFX_TYPE_UDTVAR
 import com.informix.lang.IfxTypes.IFX_TYPE_VARCHAR
+import informixcdc.Record.RowImage
+import informixcdc.Record.RowImage.AfterUpdate
+import informixcdc.Record.RowImage.BeforeUpdate
+import informixcdc.Record.RowImage.Delete
+import informixcdc.Record.RowImage.Insert
+import java.lang.Thread.currentThread
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets.UTF_8
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.time.Duration
 import java.time.Instant
 import java.util.ArrayList
+import java.util.Base64
 import java.util.HashMap
 
 internal data class CDCError(
@@ -58,7 +67,7 @@ private fun FullColumnsDescription.fixedThenVariable(): List<String> =
     fixed.map { (nameType, _) -> nameType.name } + variable.map { it.name }
 
 class Records(
-    private val getConn: (String) -> Connection,
+    private val getConn: (String) -> InformixConnection,
     private val server: String,
     private val tables: List<TableDescription>,
     private val fromSeq: Long? = null,
@@ -68,53 +77,68 @@ class Records(
     fun <R> use(block: (Iterable<Record>) -> R): R {
         val sizedTables = loadSizes(getConn, tables)
 
-        val conn = getConn("syscdcv1")
+        getConn("syscdcv1").use { conn ->
+            val errorCodes = conn.loadErrorCodes()
+            val recordTypes = conn.loadRecordTypes()
+            val getCDCResult = conn.makeGetCDCResult(errorCodes)
 
-        val errorCodes = conn.loadErrorCodes()
-        val recordTypes = conn.loadRecordTypes()
-        val getCDCResult = conn.makeGetCDCResult(errorCodes)
-
-        val sessionID: Long = conn.fetchOne("EXECUTE FUNCTION cdc_opensess(?, 0, ?, ?, 1, 1);") { row ->
-            setString(1, server)
-            setLong(2, readTimeout?.seconds ?: -1)
-            setLong(3, maxRecords)
-            row {
-                getLong(1)
-            }
-        }
-
-        val tablesByID = hashMapOf<Int, SizedTable>()
-
-        for (table in sizedTables) {
-            conn.getCDCResult("EXECUTE FUNCTION cdc_set_fullrowlogging(?, ?);") {
-                setString(1, table.fullName())
-                setInt(2, 1)
+            val sessionID: Long = conn.fetchOne("EXECUTE FUNCTION cdc_opensess(?, 0, ?, ?, 1, 1);") { row ->
+                setString(1, server)
+                setLong(2, readTimeout?.seconds ?: -1)
+                setLong(3, maxRecords)
+                row {
+                    getLong(1)
+                }
             }
 
-            conn.getCDCResult("EXECUTE FUNCTION cdc_startcapture(?, 0, ?, ?, ?);") {
+            val tablesByID = hashMapOf<Int, SizedTable>()
+
+            for (table in sizedTables) {
+                conn.getCDCResult("EXECUTE FUNCTION cdc_set_fullrowlogging(?, ?);") {
+                    setString(1, table.fullName())
+                    setInt(2, 1)
+                }
+
+                conn.getCDCResult("EXECUTE FUNCTION cdc_startcapture(?, 0, ?, ?, ?);") {
+                    setLong(1, sessionID)
+                    setString(2, table.fullName())
+                    setString(3, table.columns.fixedThenVariable().joinToString(separator = ","))
+                    setInt(4, table.id)
+                }
+
+                tablesByID[table.id] = table
+            }
+
+            conn.getCDCResult("EXECUTE FUNCTION cdc_activatesess(?, ?);") {
                 setLong(1, sessionID)
-                setString(2, table.fullName())
-                setString(3, table.columns.fixedThenVariable().joinToString(separator = ","))
-                setInt(4, table.id)
+                setLong(2, fromSeq ?: 0)
             }
 
-            tablesByID[table.id] = table
-        }
-
-        conn.getCDCResult("EXECUTE FUNCTION cdc_activatesess(?, ?);") {
-            setLong(1, sessionID)
-            setLong(2, fromSeq ?: 0)
-        }
-
-        return conn.use {
-            AutoCloseable {
+            return try {
+                block(
+                    RecordsIterable(
+                        conn.recordBytes(sessionID),
+                        recordTypes,
+                        errorCodes,
+                        tablesByID
+                    )
+                )
+            } finally {
                 conn.getCDCResult("EXECUTE FUNCTION cdc_closesess(?);") {
                     setLong(1, sessionID)
                 }
-            }.use {
-                block(RecordsIterable(conn.recordBytes(sessionID), recordTypes, errorCodes, tablesByID))
             }
         }
+    }
+}
+
+interface InformixConnection : Connection {
+    val informix: IfxConnection
+}
+
+fun Connection.asInformix(): InformixConnection = let { conn ->
+    object : Connection by conn, InformixConnection {
+        override val informix = conn as IfxConnection
     }
 }
 
@@ -259,13 +283,14 @@ private fun <T> Connection.fetchOne(sql: String, config: PreparedStatement.((Res
     return result!!
 }
 
-private fun Connection.recordBytes(sessionID: Long): Iterable<Byte> {
+private fun InformixConnection.recordBytes(sessionID: Long): Iterable<Byte> {
     val buffer = ByteArray(4096)
-    val blob = IfxSmartBlob(this)
+    val blob = IfxSmartBlob(this.informix)
 
     return Iterable {
         iterator {
-            while (true) {
+            // TODO: Is this really the best way to handle cancellation?
+            while (!currentThread().isInterrupted) {
                 val buffered = blob.IfxLoRead(sessionID.toInt(), buffer, buffer.count())
                 yieldAll(buffer.take(buffered))
             }
@@ -311,41 +336,40 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
 
     return when (types[recordNumber]) {
         "BEGINTX" ->
-            BeginTx(
+            Record.BeginTx(
                 bytes.readLong(),
-                bytes.readInt(),
-                Instant.ofEpochSecond(bytes.readLong()),
-                bytes.readInt()
+                bytes.readInt().toLong(),
+                Instant.ofEpochSecond(bytes.readLong()).toString(),
+                bytes.readInt().toLong()
             )
         "COMMTX" ->
-            CommitTx(
+            Record.CommitTx(
                 bytes.readLong(),
-                bytes.readInt(),
-                Instant.ofEpochSecond(bytes.readLong())
+                bytes.readInt().toLong(),
+                Instant.ofEpochSecond(bytes.readLong()).toString()
             )
         "RBTX" ->
-            RollbackTx(
+            Record.RollbackTx(
                 bytes.readLong(),
-                bytes.readInt()
+                bytes.readInt().toLong()
             )
         "INSERT" -> {
             decodeRowImage(bytes, payloadSize, ::Insert)
         }
         "DELETE" ->
             decodeRowImage(bytes, payloadSize, ::Delete)
-
         "UPDBEF" ->
             decodeRowImage(bytes, payloadSize, ::BeforeUpdate)
         "UPDAFT" ->
             decodeRowImage(bytes, payloadSize, ::AfterUpdate)
         "DISCARD" ->
-            Discard(
+            Record.Discard(
                 bytes.readLong(),
-                bytes.readInt()
+                bytes.readInt().toLong()
             )
         "TRUNCATE" ->
             decodeTableIDHeader(bytes).let { (seq, txID, table) ->
-                Truncate(seq, txID, table.name, table.database, table.owner)
+                Record.Truncate(seq, txID.toLong(), table.name, table.database, table.owner)
             }
         "TABSCHEMA" -> {
             val tableID = bytes.readInt()
@@ -399,7 +423,7 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
 private fun RecordsIterable.decodeRowImage(
     bytes: Iterator<Byte>,
     payloadSize: Int,
-    constructor: (Long, Int, String, String, String?, Map<String, ColumnValue>) -> RowImage
+    constructor: (Long, Long, String, String, String?, Map<String, RowImage.ColumnValue>) -> RowImage
 ): RowImage {
     val (seq, txID, table) = decodeTableIDHeader(bytes)
 
@@ -409,11 +433,15 @@ private fun RecordsIterable.decodeRowImage(
         bytes.readInt()
     }
 
-    val values = HashMap<String, ColumnValue>()
+    val values = HashMap<String, RowImage.ColumnValue>()
 
     var took = 0
     for ((column, size) in table.columns.fixed + table.columns.variable.zip(varLengths)) {
-        values[column.name] = ColumnValue(bytes.take(size), column.decode)
+        val raw = bytes.take(size)
+        values[column.name] = RowImage.ColumnValue(
+            Base64.getEncoder().encode(raw).toString(UTF_8),
+            column.decode(raw)
+        )
         took += size
     }
 
@@ -421,7 +449,7 @@ private fun RecordsIterable.decodeRowImage(
         "Expected payload of size $took, but record header reports $payloadSize for table ${table.fullName()}"
     }
 
-    return constructor(seq, txID, table.name, table.database, table.owner, values)
+    return constructor(seq, txID.toLong(), table.name, table.database, table.owner, values)
 }
 
 private data class TableIDHeader(val seq: Long, val txID: Int, val table: SizedTable)
@@ -456,11 +484,6 @@ private fun Iterator<Byte>.take(n: Int): ByteArray {
     }
     return ret
 }
-
-class ColumnValue(val raw: ByteArray, internal val decoder: (ByteArray) -> Any?)
-
-fun ColumnValue.decode(): Any? =
-    decoder(raw)
 
 private fun decoderForType(type: Int, name: String?, length: Int): (ByteArray) -> Any? =
     when (type.toShort()) {
