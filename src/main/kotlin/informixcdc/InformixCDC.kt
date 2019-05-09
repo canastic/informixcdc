@@ -3,7 +3,18 @@ package informixcdc
 import com.informix.jdbc.IfxSmartBlob
 import com.informix.lang.IfxToJavaType
 import com.informix.lang.IfxTypes
-import com.informix.lang.IfxTypes.*
+import com.informix.lang.IfxTypes.IFX_TYPE_BIGINT
+import com.informix.lang.IfxTypes.IFX_TYPE_BIGSERIAL
+import com.informix.lang.IfxTypes.IFX_TYPE_DATETIME
+import com.informix.lang.IfxTypes.IFX_TYPE_DECIMAL
+import com.informix.lang.IfxTypes.IFX_TYPE_INT8
+import com.informix.lang.IfxTypes.IFX_TYPE_INTERVAL
+import com.informix.lang.IfxTypes.IFX_TYPE_LVARCHAR
+import com.informix.lang.IfxTypes.IFX_TYPE_MONEY
+import com.informix.lang.IfxTypes.IFX_TYPE_NVCHAR
+import com.informix.lang.IfxTypes.IFX_TYPE_UDTFIXED
+import com.informix.lang.IfxTypes.IFX_TYPE_UDTVAR
+import com.informix.lang.IfxTypes.IFX_TYPE_VARCHAR
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.Charset
@@ -12,7 +23,8 @@ import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.time.Duration
 import java.time.Instant
-import java.util.*
+import java.util.ArrayList
+import java.util.HashMap
 
 internal data class CDCError(
     val code: Int,
@@ -34,15 +46,13 @@ class TableDescription(
     val name: String,
     val database: String,
     val owner: String,
-    val columns: ColumnsDescription? = null
+    val columns: List<String>? = null
 )
 
-sealed class ColumnsDescription
-data class ColumnNames(val names: List<String>) : ColumnsDescription()
-data class FullColumnsDescription(
+private data class FullColumnsDescription(
     val fixed: List<Pair<ColumnWithDecoder, Int>>,
     val variable: List<ColumnWithDecoder>
-) : ColumnsDescription()
+)
 
 private fun FullColumnsDescription.fixedThenVariable(): List<String> =
     fixed.map { (nameType, _) -> nameType.name } + variable.map { it.name }
@@ -122,15 +132,7 @@ private fun loadSizes(getConn: (String) -> Connection, tables: List<TableDescrip
     return Array(tablesArray.count()) { i ->
         val table = tablesArray[i]
         getConn(table.database).use { conn ->
-            val (id, columns) = when (table.columns) {
-                is FullColumnsDescription ->
-                    Pair(conn.fetchTableID(table.name), table.columns)
-                is ColumnNames ->
-                    conn.loadTableSize(table.name, table.columns.names)
-                else ->
-                    conn.loadTableSize(table.name)
-            }
-
+            val (id, columns) = conn.loadTableSize(table.name, table.columns)
             SizedTable(id, table.name, table.database, table.owner, columns)
         }
     }
@@ -153,7 +155,7 @@ data class ColumnWithDecoder(
     val decode: (ByteArray) -> Any?
 )
 
-fun Connection.loadTableSize(table: String, columns: List<String>? = null): Pair<Int, FullColumnsDescription> {
+private fun Connection.loadTableSize(table: String, columns: List<String>? = null): Pair<Int, FullColumnsDescription> {
     val tableID = fetchTableID(table)
 
     val fixed = ArrayList<Pair<ColumnWithDecoder, Int>>()
@@ -437,7 +439,9 @@ private fun Iterator<Byte>.readInt(): Int =
     byteArrayOf(next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).int }
 
 private fun Iterator<Byte>.readLong(): Long =
-    byteArrayOf(next(), next(), next(), next(), next(), next(), next(), next()).let { ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).long }
+    byteArrayOf(next(), next(), next(), next(), next(), next(), next(), next()).let {
+        ByteBuffer.wrap(it).order(ByteOrder.BIG_ENDIAN).long
+    }
 
 private fun <T> Iterator<T>.drop(n: Int) {
     for (i in 0 until n) {

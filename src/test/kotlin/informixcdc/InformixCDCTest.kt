@@ -5,7 +5,10 @@ import java.math.BigDecimal
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.Timestamp
-import java.util.*
+import java.util.ArrayList
+import java.util.HashMap
+import java.util.HashSet
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -33,7 +36,9 @@ class IntegrationTest {
                         TestColumn("SMALLINT") { i, stmt -> 13.toShort().also { stmt.setShort(i, it) } },
                         TestColumn("SMALLINT") { i, stmt -> (-13).toShort().also { stmt.setShort(i, it) } },
                         TestColumn("SMALLINT") { i, stmt -> Short.MAX_VALUE.also { stmt.setShort(i, it) } },
-                        TestColumn("SMALLINT") { i, stmt -> (Short.MIN_VALUE + 1).toShort().also { stmt.setShort(i, it) } },
+                        TestColumn("SMALLINT") { i, stmt ->
+                            (Short.MIN_VALUE + 1).toShort().also { stmt.setShort(i, it) }
+                        },
                         TestColumn("SMALLINT") { i, stmt -> null.also { stmt.setObject(i, it) } }
                     ),
                     listOf(
@@ -54,8 +59,22 @@ class IntegrationTest {
                         TestColumn("SMALLFLOAT") { i, stmt -> null.also { stmt.setObject(i, it) } }
                     ),
                     listOf(
-                        TestColumn("DECIMAL") { i, stmt -> BigDecimal("12.34").also { stmt.setString(i, it.toString()) } },
-                        TestColumn("DECIMAL") { i, stmt -> BigDecimal("-12.34").also { stmt.setString(i, it.toString()) } },
+                        TestColumn("DECIMAL") { i, stmt ->
+                            BigDecimal("12.34").also {
+                                stmt.setString(
+                                    i,
+                                    it.toString()
+                                )
+                            }
+                        },
+                        TestColumn("DECIMAL") { i, stmt ->
+                            BigDecimal("-12.34").also {
+                                stmt.setString(
+                                    i,
+                                    it.toString()
+                                )
+                            }
+                        },
                         TestColumn("DECIMAL") { i, stmt -> null.also { stmt.setString(i, it) } }
                     ),
                     listOf(
@@ -63,8 +82,22 @@ class IntegrationTest {
                         TestColumn("DATE") { i, stmt -> null.also { stmt.setDate(i, it) } }
                     ),
                     listOf(
-                        TestColumn("MONEY") { i, stmt -> BigDecimal("12.34").also { stmt.setString(i, it.toString()) } },
-                        TestColumn("MONEY") { i, stmt -> BigDecimal("-12.34").also { stmt.setString(i, it.toString()) } },
+                        TestColumn("MONEY") { i, stmt ->
+                            BigDecimal("12.34").also {
+                                stmt.setString(
+                                    i,
+                                    it.toString()
+                                )
+                            }
+                        },
+                        TestColumn("MONEY") { i, stmt ->
+                            BigDecimal("-12.34").also {
+                                stmt.setString(
+                                    i,
+                                    it.toString()
+                                )
+                            }
+                        },
                         TestColumn("MONEY") { i, stmt -> null.also { stmt.setString(i, it) } }
                     ),
                     listOf(
@@ -138,7 +171,14 @@ class IntegrationTest {
                     ),
                     listOf(10, 20).flatMap { prec ->
                         listOf(
-                            TestColumn("DECIMAL($prec)") { i, stmt -> BigDecimal("12.34").also { stmt.setString(i, it.toString()) } },
+                            TestColumn("DECIMAL($prec)") { i, stmt ->
+                                BigDecimal("12.34").also {
+                                    stmt.setString(
+                                        i,
+                                        it.toString()
+                                    )
+                                }
+                            },
                             TestColumn("DECIMAL($prec)") { i, stmt -> null.also { stmt.setString(i, it) } }
                         )
                     },
@@ -166,12 +206,26 @@ class IntegrationTest {
                             Timestamp(0, 1, 1, 0, 44, 13, 534210000)
                         },
                         TestColumn("LVARCHAR") { i, stmt -> "".also { stmt.setString(i, it) } },
-                        TestColumn("DECIMAL") { i, stmt -> BigDecimal("12.34").also { stmt.setString(i, it.toString()) } }
+                        TestColumn("DECIMAL") { i, stmt ->
+                            BigDecimal("12.34").also {
+                                stmt.setString(
+                                    i,
+                                    it.toString()
+                                )
+                            }
+                        }
                     )
                 ) + listOf(10, 15).flatMap { prec ->
                     (2..7).map { scale ->
                         listOf(
-                            TestColumn("DECIMAL($prec, $scale)") { i, stmt -> BigDecimal("12.34").also { stmt.setString(i, it.toString()) } },
+                            TestColumn("DECIMAL($prec, $scale)") { i, stmt ->
+                                BigDecimal("12.34").also {
+                                    stmt.setString(
+                                        i,
+                                        it.toString()
+                                    )
+                                }
+                            },
                             TestColumn("DECIMAL($prec, $scale)") { i, stmt -> null.also { stmt.setString(i, it) } }
                         )
                     }
@@ -250,7 +304,7 @@ fun testTables(conn: TestConnection, tables: List<List<TestColumn<*>>>) {
                 tableName(i),
                 conn.database,
                 testUser(),
-                ColumnNames(columns.withIndex().map { (i, _) -> columnName(i) })
+                columns.withIndex().map { (i, _) -> columnName(i) }
             )
         }
     ).use { records ->
@@ -268,7 +322,10 @@ fun testTables(conn: TestConnection, tables: List<List<TestColumn<*>>>) {
     }
 }
 
-private fun TestTablesContext.testInsert(conn: Connection, records: Iterator<Record>): HashMap<String, ArrayList<Any?>> {
+private fun TestTablesContext.testInsert(
+    conn: Connection,
+    records: Iterator<Record>
+): HashMap<String, ArrayList<Any?>> {
     val expectedByTable = doAndGetExpected(conn::insert)
 
     (0 until columnsByTable.count()).forEach {
@@ -295,7 +352,11 @@ private fun TestTablesContext.testUpdate(conn: Connection, records: Iterator<Rec
     }
 }
 
-private fun TestTablesContext.testDelete(conn: Connection, records: Iterator<Record>, expectedByTable: HashMap<String, ArrayList<Any?>>) {
+private fun TestTablesContext.testDelete(
+    conn: Connection,
+    records: Iterator<Record>,
+    expectedByTable: HashMap<String, ArrayList<Any?>>
+) {
     for ((table, _) in expectedByTable) {
         conn.prepareStatement("DELETE FROM $table").use { it.execute() }
     }
