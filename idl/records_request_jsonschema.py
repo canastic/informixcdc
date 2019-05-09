@@ -2,24 +2,24 @@
 
 schema = {
     "type": "object",
-    "properties": {
-        "from_seq": {"oneOf": [
+    "properties": [
+        ("from_seq", {"oneOf": [
             {"type": "integer"},
             {"type": "null"}
-        ]},
-        "tables": {
+        ]}),
+        ("tables", {
             "type": "array",
-            "items": {"type": "object", "properties": {
-                "name": {"type": "string"},
-                "database": {"type": "string"},
-                "owner": {"type": "string"},
-                "columns": {"oneOf": [
+            "items": {"type": "object", "properties": [
+                ("name", {"type": "string"}),
+                ("database", {"type": "string"}),
+                ("owner", {"type": "string"}),
+                ("columns", {"oneOf": [
                     {"type": "null"},
                     {"type": "array", "items": {"type": "string"}}
-                ]}
-            }}
-        }
-    }
+                ]})
+            ]}
+        })
+    ]
 }
 
 from process_jsonschema import to_json

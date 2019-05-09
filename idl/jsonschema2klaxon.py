@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from copy import copy
+from collections import OrderedDict
 import re
 
 class Class:
@@ -166,9 +167,9 @@ def extract_oneof_discriminant_field(schemas, name):
             return None, None, False
 
         for ppty_name, ppty_schema in ppties.items():
-            values = set(ppty_schema.get("enum", []))
+            values = OrderedSet(ppty_schema.get("enum", []))
             if "const" in  ppty_schema:
-                values = values.union(set([ppty_schema["const"]]))
+                values = values.union(OrderedSet([ppty_schema["const"]]))
             if len(values) == 0:
                 continue
 
@@ -271,7 +272,7 @@ def extract_directive(schema, key):
     return directives.get(key, None)
 
 def extract_oneof_different_types(schemas, name):
-    types = {}
+    types = OrderedDict()
     for schema in schemas:
         typ = schema["type"]
         if typ in types:
@@ -301,6 +302,8 @@ def extract_oneof_different_types(schemas, name):
 def extract_object(schema):
     required = set(schema.get("required", []))
     fields = schema.get("properties", {})
+    fields = OrderedDict((k, fields[k]) for k in schema.get("$propertiesOrder", []))
+
     for p in required:
         if p not in fields.keys():
             fields[p] = {}
@@ -602,6 +605,25 @@ class Emitter:
             printer.print(f": {p.type}")
             if p.default is not None:
                 printer.print(f" = {p.default}")
+
+class OrderedSet:
+    def __init__(self, vs):
+        self._d = OrderedDict((v, None) for v in vs)
+
+    def union(self, other):
+        return OrderedSet(v for v in list(self) + list(other))
+
+    def intersection(self, other):
+        return OrderedDict(v for v in list(self) + list(other) if v in self and v in other)
+
+    def __contains__(self, item):
+        return item in self._d
+
+    def __iter__(self):
+        return self._d.keys().__iter__()
+
+    def __len__(self):
+        return len(self._d)
 
 import sys
 import json
