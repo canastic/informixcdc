@@ -62,7 +62,7 @@ class Records(
     private val server: String,
     private val tables: List<TableDescription>,
     private val fromSeq: Long? = null,
-    private val readTimeout: Duration? = Duration.ofMillis(50),
+    private val readTimeout: Duration? = Duration.ofMillis(1 * 1000),
     private val maxRecords: Long = 100
 ) {
     fun <R> use(block: (Iterable<Record>) -> R): R {
