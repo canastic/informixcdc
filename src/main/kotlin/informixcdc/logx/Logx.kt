@@ -117,23 +117,65 @@ fun <T> Log.failable(successEvent: String, vararg classes: Class<Throwable>, blo
         r
     }
 
-fun <T> Log.scope(name: String, block: () -> T): T =
-    add("scope" to name) { block() }
+fun <T> Log.scope(name: String, vararg addKVs: KV, block: () -> T): T =
+    add("scope" to name, *addKVs) { block() }
 
-fun <T> Log.running(id: String, vararg startedKVs: KV, stopping: Object? = null, block: () -> T): T {
-    event("started", "running_id" to id, *startedKVs)
+fun <T> running(lifetime: RunningLifetimeLogs, stopping: Object? = null, block: () -> T): T {
     stopping?.let { stopping ->
         val inherit = inheritLog()
         thread(start = true) {
             inherit {
                 synchronized(stopping) { stopping.wait() }
-                event("stopping", "running_id" to id)
+                lifetime.stopping()
             }
         }
     }
-    return duration("stopped", "running_id" to id) {
+    return try {
         block()
+    } finally {
+        lifetime.stopped()
     }
+}
+
+interface RunningLifetimeLogs {
+    fun stopping()
+    fun stopped()
+}
+
+fun Log.start(runningID: String, vararg addKVs: KV): RunningLifetimeLogs {
+    val started = Instant.now()
+    event("started", *addKVs, "running_id" to runningID)
+    return object : RunningLifetimeLogs {
+        override fun stopping() {
+            event("stopping", "running_id" to runningID)
+        }
+
+        override fun stopped() {
+            durationSince(started, "stopped", "running_id" to runningID)
+        }
+    }
+}
+
+fun gauged(gauge: Gauge, lifetime: RunningLifetimeLogs): RunningLifetimeLogs {
+    gauge.add(1)
+    return object : RunningLifetimeLogs {
+        override fun stopping() {
+            lifetime.stopping()
+        }
+
+        override fun stopped() {
+            gauge.add(-1)
+            lifetime.stopped()
+        }
+    }
+}
+
+fun Log.durationSince(started: Instant, eventType: String, vararg addKVs: KV) {
+    event(
+        eventType,
+        "duration" to Duration.between(started, Instant.now()),
+        *addKVs
+    )
 }
 
 fun <T> Log.duration(eventType: String, vararg eventKVs: KV, block: () -> T): T =
@@ -141,11 +183,7 @@ fun <T> Log.duration(eventType: String, vararg eventKVs: KV, block: () -> T): T 
         try {
             block()
         } finally {
-            event(
-                eventType,
-                "duration" to Duration.between(started, Instant.now()),
-                *eventKVs
-            )
+            durationSince(started, eventType, *eventKVs)
         }
     }
 

@@ -3,51 +3,38 @@ package informixcdc
 import com.beust.klaxon.Klaxon
 import com.beust.klaxon.KlaxonException
 import com.informix.jdbcx.IfxDataSource
+import de.huxhorn.sulky.ulid.ULID
 import informixcdc.logx.duration
 import informixcdc.logx.error
 import informixcdc.logx.event
+import informixcdc.logx.gauged
 import informixcdc.logx.inheritLog
 import informixcdc.logx.log
 import informixcdc.logx.running
 import informixcdc.logx.scope
+import informixcdc.logx.start
 import io.javalin.Javalin
 import io.javalin.websocket.WsSession
 import java.util.concurrent.ConcurrentHashMap
 
-val parseRecordsRequest = with(Klaxon()) {
+val klaxon = Klaxon().apply {
     RecordsRequest.setUpConverters(this)
-    ({ msg: String -> parse<RecordsRequest>(msg)!! })
+    Record.setUpConverters(this)
+}
+
+object config {
+    val serverPort = System.getenv("INFORMIXCDC_SERVER_PORT").toInt()
+
+    object informix {
+        val host = System.getenv("INFORMIXCDC_INFORMIX_HOST")
+        val port = System.getenv("INFORMIXCDC_INFORMIX_PORT").toInt()
+        val serverName = System.getenv("INFORMIXCDC_INFORMIX_SERVER_NAME")
+        val user = System.getenv("INFORMIXCDC_INFORMIX_USER")
+        val password = System.getenv("INFORMIXCDC_INFORMIX_PASSWORD")
+    }
 }
 
 fun main() = main { shutdown, done ->
-    val config = object {
-        val serverPort = System.getenv("INFORMIXCDC_SERVER_PORT").toInt()
-        val informix = object {
-            val host = System.getenv("INFORMIXCDC_INFORMIX_HOST")
-            val port = System.getenv("INFORMIXCDC_INFORMIX_PORT").toInt()
-            val serverName = System.getenv("INFORMIXCDC_INFORMIX_SERVER_NAME")
-            val user = System.getenv("INFORMIXCDC_INFORMIX_USER")
-            val password = System.getenv("INFORMIXCDC_INFORMIX_PASSWORD")
-        }
-    }
-
-    val getConn = { database: String ->
-        with(
-            IfxDataSource().apply {
-                ifxIFXHOST = config.informix.host
-                portNumber = config.informix.port
-                serverName = config.informix.serverName
-                user = config.informix.user
-                password = config.informix.password
-                databaseName = database
-            }
-        ) {
-            log.duration("informix_connected") {
-                connection
-            }
-        }
-    }
-
     val app = Javalin.create()
 
     val threads = log.gauged(
@@ -58,23 +45,23 @@ fun main() = main { shutdown, done ->
 
     app.ws("/records") { ws ->
         ws.onConnect { session ->
-            log.scope("records_forwarder") {
-                log.event("connected", "session_id" to session.id, "remote_address" to session.remoteAddress)
+            recordsForwarderScope(session) {
+                log.event("connected", "remote_address" to session.remoteAddress)
                 connections.add(1)
             }
         }
 
         ws.onMessage { session, msg ->
-            log.scope("records_forwarder") {
+            recordsForwarderScope(session) {
                 val request = try {
-                    parseRecordsRequest(msg)
+                    klaxon.parse<RecordsRequest>(msg)!!
                 } catch (e: KlaxonException) {
                     session.close(400, e.message!!)
-                    return@scope
+                    return@recordsForwarderScope
                 }
 
                 val records = Records(
-                    getConn = getConn,
+                    getConn = ::getConn,
                     server = config.informix.serverName,
                     fromSeq = request.fromSeq,
                     tables = request.tables.map {
@@ -93,23 +80,18 @@ fun main() = main { shutdown, done ->
         }
 
         ws.onClose { session, _, reason ->
-            log.scope("records_forwarder") {
+            recordsForwarderScope(session) {
                 try {
                     threads.remove(session.id)?.safeStop(reason?.let { Throwable(it) })
                 } finally {
-                    log.event(
-                        "closed",
-                        "session_id" to session.id,
-                        "remote_address" to session.remoteAddress,
-                        "reason" to (reason ?: "")
-                    )
+                    log.event("closed", "reason" to (reason ?: ""))
                     connections.add(-1)
                 }
             }
         }
     }
 
-    log.running("server", "server_port" to config.serverPort, stopping = shutdown) {
+    running(log.start("server", "server_port" to config.serverPort), stopping = shutdown) {
         app.start(config.serverPort)
 
         synchronized(shutdown) { shutdown.wait() }
@@ -117,6 +99,11 @@ fun main() = main { shutdown, done ->
         app.stop()
     }
 }
+
+fun <T> recordsForwarderScope(session: WsSession, block: () -> T): T =
+    log.scope("records_forwarder", "ws_id" to session.id) {
+        block()
+    }
 
 fun main(block: (Object, Object) -> Unit) {
     val shutdown = Object()
@@ -130,7 +117,7 @@ fun main(block: (Object, Object) -> Unit) {
     )
 
     try {
-        log.running("main", stopping = shutdown) {
+        running(log.start("main"), stopping = shutdown) {
             block(shutdown, done)
         }
     } finally {
@@ -146,9 +133,7 @@ class RecordsForwarderThread(
     private var error: Throwable? = null
 
     override fun run() = inherit {
-        log.running(session.id) {
-            val klaxon = Klaxon()
-
+        running(log.start(session.id)) {
             records.use { records ->
                 try {
                     for (record in records) {
@@ -164,7 +149,7 @@ class RecordsForwarderThread(
                         session.close(500, "Internal Server Error")
                         throw e
                     }
-                    error?.let { e ->
+                    synchronized(this) { error }?.let { e ->
                         log.error(e)
                     }
                 }
@@ -175,7 +160,43 @@ class RecordsForwarderThread(
     fun safeStop(t: Throwable? = null) {
         synchronized(this) {
             error = t
-            interrupt()
         }
+        interrupt()
     }
 }
+
+val informixConnections = log.gauge("informix_connections")
+
+fun getConn(database: String): InformixConnection =
+    with(
+        IfxDataSource().apply {
+            ifxIFXHOST = config.informix.host
+            portNumber = config.informix.port
+            serverName = config.informix.serverName
+            user = config.informix.user
+            password = config.informix.password
+            databaseName = database
+        }
+    ) {
+        val id = "informix_conn:${ULID().nextULID()}"
+
+        val conn =
+            log.duration(
+                "informix_connected",
+                "informix_address" to "${config.informix.host}:${config.informix.port}",
+                "informix_database" to "$database@${config.informix.serverName}",
+                "running_id" to id
+            ) {
+                getConnection()
+            }
+
+        val lifetime = gauged(informixConnections, log.start(id))
+        object : InformixConnection by conn.asInformix() {
+            override fun close() = try {
+                lifetime.stopping()
+                conn.close()
+            } finally {
+                lifetime.stopped()
+            }
+        }
+    }
