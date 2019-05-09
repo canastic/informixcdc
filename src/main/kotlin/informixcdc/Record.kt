@@ -92,29 +92,6 @@ sealed class Record {
             companion object
         }
         
-        class AfterUpdate(
-            @Json(name = "seq")
-            override val seq: Long,
-            
-            @Json(name = "transaction_id")
-            override val transactionID: Long,
-            
-            @Json(name = "table")
-            override val table: String,
-            
-            @Json(name = "database")
-            override val database: String,
-            
-            @Json(name = "owner")
-            override val owner: String?,
-            
-            @Json(name = "values")
-            override val values: Map<String, ColumnValue>
-        ) : RowImage() {
-        
-            companion object
-        }
-        
         class BeforeUpdate(
             @Json(name = "seq")
             override val seq: Long,
@@ -139,6 +116,29 @@ sealed class Record {
         }
         
         class Delete(
+            @Json(name = "seq")
+            override val seq: Long,
+            
+            @Json(name = "transaction_id")
+            override val transactionID: Long,
+            
+            @Json(name = "table")
+            override val table: String,
+            
+            @Json(name = "database")
+            override val database: String,
+            
+            @Json(name = "owner")
+            override val owner: String?,
+            
+            @Json(name = "values")
+            override val values: Map<String, ColumnValue>
+        ) : RowImage() {
+        
+            companion object
+        }
+        
+        class AfterUpdate(
             @Json(name = "seq")
             override val seq: Long,
             
@@ -237,12 +237,12 @@ sealed class Record {
                         klaxon.fromJsonObject(jv.obj!!, CommitTx::class.java, CommitTx::class)
                     v == "rollback_tx" ->
                         klaxon.fromJsonObject(jv.obj!!, RollbackTx::class.java, RollbackTx::class)
-                    v == "after_update" ->
-                        klaxon.fromJsonObject(jv.obj!!, RowImage.AfterUpdate::class.java, RowImage.AfterUpdate::class)
                     v == "before_update" ->
                         klaxon.fromJsonObject(jv.obj!!, RowImage.BeforeUpdate::class.java, RowImage.BeforeUpdate::class)
                     v == "delete" ->
                         klaxon.fromJsonObject(jv.obj!!, RowImage.Delete::class.java, RowImage.Delete::class)
+                    v == "after_update" ->
+                        klaxon.fromJsonObject(jv.obj!!, RowImage.AfterUpdate::class.java, RowImage.AfterUpdate::class)
                     v == "insert" ->
                         klaxon.fromJsonObject(jv.obj!!, RowImage.Insert::class.java, RowImage.Insert::class)
                     v == "discard" ->
@@ -261,12 +261,12 @@ sealed class Record {
                         klaxon.toJsonString(value as CommitTx).dropLast(1) + ",\"type\":\"commit_tx\"}"
                 is RollbackTx ->
                         klaxon.toJsonString(value as RollbackTx).dropLast(1) + ",\"type\":\"rollback_tx\"}"
-                is RowImage.AfterUpdate ->
-                        klaxon.toJsonString(value as RowImage.AfterUpdate).dropLast(1) + ",\"type\":\"after_update\"}"
                 is RowImage.BeforeUpdate ->
                         klaxon.toJsonString(value as RowImage.BeforeUpdate).dropLast(1) + ",\"type\":\"before_update\"}"
                 is RowImage.Delete ->
                         klaxon.toJsonString(value as RowImage.Delete).dropLast(1) + ",\"type\":\"delete\"}"
+                is RowImage.AfterUpdate ->
+                        klaxon.toJsonString(value as RowImage.AfterUpdate).dropLast(1) + ",\"type\":\"after_update\"}"
                 is RowImage.Insert ->
                         klaxon.toJsonString(value as RowImage.Insert).dropLast(1) + ",\"type\":\"insert\"}"
                 is Discard ->

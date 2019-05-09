@@ -2,13 +2,13 @@
 
 before=$(git diff --name-only)
 
-./idl/records_request_jsonschema.py | ./idl/jsonschema2klaxon.py informixcdc RecordsRequest > src/main/kotlin/informixcdc/RecordsRequest.kt
-./idl/record_jsonschema.py | ./idl/jsonschema2klaxon.py informixcdc Record > src/main/kotlin/informixcdc/Record.kt
-
 for file in $(git diff --cached --name-only | grep -e '\.kt$'); do
 	ktlint --experimental -F "$file" &
 done
 wait
+
+./idl/records_request_jsonschema.py | ./idl/jsonschema2klaxon.py informixcdc RecordsRequest > src/main/kotlin/informixcdc/RecordsRequest.kt && git add src/main/kotlin/informixcdc/RecordsRequest.kt
+./idl/record_jsonschema.py | ./idl/jsonschema2klaxon.py informixcdc Record > src/main/kotlin/informixcdc/Record.kt && git add src/main/kotlin/informixcdc/Record.kt
 
 after=$(git diff --name-only)
 
