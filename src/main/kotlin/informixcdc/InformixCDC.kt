@@ -294,7 +294,7 @@ private class RecordsIterable(
                 }
             } catch (_: CDCTimeout) {
                 // Just reset iterator.
-                bytes.iterator()
+                bytesIter = bytes.iterator()
             }
         }
     }
