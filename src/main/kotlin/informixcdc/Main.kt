@@ -14,12 +14,12 @@ import informixcdc.logx.log
 import informixcdc.logx.running
 import informixcdc.logx.scope
 import informixcdc.logx.start
+import informixcdc.logx.uncaught
 import io.javalin.Javalin
 import io.javalin.websocket.WsSession
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 val klaxon = Klaxon().apply {
     RecordsRequest.setUpConverters(this)
@@ -84,7 +84,13 @@ fun main() = main { shutdown ->
                         )
                     }
                 )
-                val thread = RecordsForwarderThread(RecordsForwarderWsSession(session), records, heartbeatInterval)
+                val thread = log.uncaught(
+                    RecordsForwarderThread(
+                        RecordsForwarderWsSession(session),
+                        records,
+                        heartbeatInterval
+                    )
+                )
                 threads[session.id] = thread
                 thread.start()
             }
@@ -170,7 +176,7 @@ internal class RecordsForwarderThread(
     override fun run() = inherit {
         val done = AtomicBoolean(false)
 
-        val heartbeater = thread(start = true) {
+        val heartbeater = log.uncaught(Thread {
             while (!done.get()) {
                 try {
                     sleep(heartbeatInterval.toMillis())
@@ -183,7 +189,7 @@ internal class RecordsForwarderThread(
                 }
                 session.sync { send(RecordsMessage.Heartbeat()) }
             }
-        }
+        }).apply { start() }
 
         running(log.start(session.id)) {
             records.use { records ->

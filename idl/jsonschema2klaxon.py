@@ -256,7 +256,7 @@ def extract_oneof_discriminant_field(schemas, name):
             name_path = variant_name
             if common_class != None:
                 name_path = f"{common_class.name}.{name_path}"
-            variants_by_tag.append((tag_value, name_path, variant_properties))
+            variants_by_tag.append((tag_value, name_path, properties))
 
     return name, [parent], True
 

@@ -211,6 +211,13 @@ class Gauge {
     internal fun poll(): Long = value.get()
 }
 
+fun <T : Thread> Log.uncaught(t: T): T =
+    t.apply {
+        uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, e ->
+            error(e)
+        }
+    }
+
 private class GaugePoll(
     val name: String,
     val poll: () -> Long

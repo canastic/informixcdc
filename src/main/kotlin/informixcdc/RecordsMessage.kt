@@ -269,13 +269,13 @@ sealed class RecordsMessage {
                         is RollbackTx ->
                                 "{\"type\":\"rollback_tx\"}"
                         is RowImage.Insert ->
-                                "{\"type\":\"insert\"}"
+                                klaxon.toJsonString(value as RowImage.Insert).dropLast(1) + ",\"type\":\"insert\"}"
                         is RowImage.Delete ->
-                                "{\"type\":\"delete\"}"
+                                klaxon.toJsonString(value as RowImage.Delete).dropLast(1) + ",\"type\":\"delete\"}"
                         is RowImage.BeforeUpdate ->
-                                "{\"type\":\"before_update\"}"
+                                klaxon.toJsonString(value as RowImage.BeforeUpdate).dropLast(1) + ",\"type\":\"before_update\"}"
                         is RowImage.AfterUpdate ->
-                                "{\"type\":\"after_update\"}"
+                                klaxon.toJsonString(value as RowImage.AfterUpdate).dropLast(1) + ",\"type\":\"after_update\"}"
                         is Discard ->
                                 "{\"type\":\"discard\"}"
                         is Truncate ->
