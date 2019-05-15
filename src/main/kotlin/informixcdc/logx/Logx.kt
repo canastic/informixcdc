@@ -1,5 +1,7 @@
 package informixcdc.logx
 
+import com.beust.klaxon.Converter
+import com.beust.klaxon.JsonValue
 import com.beust.klaxon.Klaxon
 import de.huxhorn.sulky.ulid.ULID
 import java.io.StringWriter
@@ -224,12 +226,17 @@ private class GaugePoll(
 )
 typealias KV = Pair<String, Any>
 
+private fun kvConverter(klaxon: Klaxon): Converter = object : Converter {
+    override fun canConvert(cls: Class<*>): Boolean = cls == Pair::class.java
+    override fun fromJson(jv: JsonValue): Any? = jv.array!![0] to jv.array!![1]
+    override fun toJson(value: Any): String =
+        (value as Pair<*, *>).let { (k, v) -> klaxon.toJsonString(listOf(k, v)) }
+}
+
+private val klaxon = Klaxon().apply {
+    converter(kvConverter(this))
+}
+
 private fun emit(kvs: Sequence<KV>) {
-    System.err.println(
-        Klaxon().toJsonString(
-            kvs
-                .map { (k, v) -> listOf(k, v) }
-                .toList()
-        )
-    )
+    System.err.println(klaxon.toJsonString(kvs.toList()))
 }
