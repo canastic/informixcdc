@@ -40,7 +40,7 @@ object config {
     }
 }
 
-fun main() = main { shutdown, done ->
+fun main() = main { shutdown ->
     val app = Javalin.create()
 
     val threads = log.gauged(
@@ -111,23 +111,33 @@ internal fun <T> recordsForwarderScope(session: WsSession, block: () -> T): T =
         block()
     }
 
-fun main(block: (Object, Object) -> Unit) {
+internal class ObjectOf<T>(var value: T) : Object()
+
+internal fun main(block: (Object) -> Unit) {
     val shutdown = Object()
-    val done = Object()
+    val done = ObjectOf(false)
 
     Runtime.getRuntime().addShutdownHook(
         Thread {
-            synchronized(shutdown) { shutdown.notifyAll() }
-            synchronized(done) { done.wait(10 * 1000) }
+            shutdown.sync { shutdown.notifyAll() }
+            done.sync {
+                wait(10 * 1000)
+                if (!value) {
+                    log.event("shutdown_timeout")
+                }
+            }
         }
     )
 
     try {
         running(log.start("main"), stopping = shutdown) {
-            block(shutdown, done)
+            block(shutdown)
         }
     } finally {
-        synchronized(done) { done.notifyAll() }
+        done.sync {
+            value = true
+            notifyAll()
+        }
     }
 }
 
