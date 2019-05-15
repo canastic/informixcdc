@@ -9,7 +9,6 @@ import com.beust.klaxon.JsonValue
 import com.beust.klaxon.JsonObject
 import com.beust.klaxon.KlaxonException
 
-private val converters = ArrayList<(Klaxon) -> Converter>()
 
 sealed class Record {
 
@@ -219,10 +218,6 @@ sealed class Record {
     }
     
     companion object {
-        init {
-            converters.add(this::converter)
-        }
-
         fun converter(klaxon: Klaxon) = object : Converter {
              var enabled = true
 
@@ -260,17 +255,17 @@ sealed class Record {
                 is CommitTx ->
                         klaxon.toJsonString(value as CommitTx).dropLast(1) + ",\"type\":\"commit_tx\"}"
                 is RollbackTx ->
-                        klaxon.toJsonString(value as RollbackTx).dropLast(1) + ",\"type\":\"rollback_tx\"}"
+                        "{\"type\":\"rollback_tx\"}"
                 is RowImage.Insert ->
-                        klaxon.toJsonString(value as RowImage.Insert).dropLast(1) + ",\"type\":\"insert\"}"
+                        "{\"type\":\"insert\"}"
                 is RowImage.Delete ->
-                        klaxon.toJsonString(value as RowImage.Delete).dropLast(1) + ",\"type\":\"delete\"}"
+                        "{\"type\":\"delete\"}"
                 is RowImage.BeforeUpdate ->
-                        klaxon.toJsonString(value as RowImage.BeforeUpdate).dropLast(1) + ",\"type\":\"before_update\"}"
+                        "{\"type\":\"before_update\"}"
                 is RowImage.AfterUpdate ->
-                        klaxon.toJsonString(value as RowImage.AfterUpdate).dropLast(1) + ",\"type\":\"after_update\"}"
+                        "{\"type\":\"after_update\"}"
                 is Discard ->
-                        klaxon.toJsonString(value as Discard).dropLast(1) + ",\"type\":\"discard\"}"
+                        "{\"type\":\"discard\"}"
                 is Truncate ->
                         klaxon.toJsonString(value as Truncate).dropLast(1) + ",\"type\":\"truncate\"}"
            } } finally { enabled = true }
@@ -280,5 +275,5 @@ sealed class Record {
 }
 
 fun Record.Companion.setUpConverters(klaxon: Klaxon) {
-    converters.forEach { klaxon.converter(it(klaxon)) }
+    klaxon.converter(Record.converter(klaxon))
 }

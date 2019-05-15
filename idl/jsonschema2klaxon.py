@@ -362,13 +362,14 @@ def emit(schema, package, name):
     print("import com.beust.klaxon.JsonObject")
     print("import com.beust.klaxon.KlaxonException")
     print("")
-    print("private val converters = ArrayList<(Klaxon) -> Converter>()")
 
-    Emitter(definitions).emit_declarations(declarations)
+    emitter = Emitter(definitions)
+    emitter.emit_declarations(declarations)
 
     print("")
     print(f"fun {name}.Companion.setUpConverters(klaxon: Klaxon)" + " {")
-    print("    converters.forEach { klaxon.converter(it(klaxon)) }")
+    for path in emitter.classes_with_converter:
+        print(f"    klaxon.converter({'.'.join(path)}.converter(klaxon))")
     print("}")
 
 
@@ -388,16 +389,17 @@ class Printer:
 class Emitter:
     def __init__(self, definitions):
         self.definitions = definitions
+        self.classes_with_converter = []
 
-    def emit_declarations(self, decls, printer=Printer()):
+    def emit_declarations(self, decls, printer=Printer(), path=[]):
         for decl in decls:
             printer.print("\n")
-            self.emit_decl(decl, printer)
+            self.emit_decl(decl, printer, path + [decl.name])
             printer.print("\n")
 
-    def emit_decl(self, decl, printer):
+    def emit_decl(self, decl, printer, path):
         if isinstance(decl, Class):
-            self.emit_class(decl, printer)
+            self.emit_class(decl, printer, path)
         elif isinstance(decl, Enum):
             printer.print(f"enum class {decl.name} " + "{")
             first = True
@@ -411,7 +413,7 @@ class Emitter:
         else:
             assert(False)
 
-    def emit_class(self, c, printer):
+    def emit_class(self, c, printer, path):
         properties, inner_types = self.resolve_embedded(c)
 
         if c.sealed:
@@ -446,20 +448,17 @@ class Emitter:
 
         if c.sealed:
             self.emit_properties([(p, 'abstract') for p in properties], printer.indent(), True)
-        self.emit_declarations(inner_types, printer.indent())
+        self.emit_declarations(inner_types, printer.indent(), path)
 
         printer.print("\n    companion object")
         if isinstance(c, Union):
-            self.emit_converter(c, printer)
+            self.emit_converter(c, printer, path)
 
         printer.print("\n}")
 
-    def emit_converter(self, c, printer):
+    def emit_converter(self, c, printer, path):
         printer.print(" {\n")
-        printer.print("        init {\n")
-        printer.print("            converters.add(this::converter)\n")
-        printer.print("        }\n")
-        print("")
+        self.classes_with_converter.append(path)
 
         # TODO: The 'enabled' thing is extremely hacky.
         #

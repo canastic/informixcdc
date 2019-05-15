@@ -9,7 +9,6 @@ import com.beust.klaxon.JsonValue
 import com.beust.klaxon.JsonObject
 import com.beust.klaxon.KlaxonException
 
-private val converters = ArrayList<(Klaxon) -> Converter>()
 
 class RecordsRequest(
     @Json(name = "from_seq")
@@ -40,5 +39,4 @@ class RecordsRequest(
 }
 
 fun RecordsRequest.Companion.setUpConverters(klaxon: Klaxon) {
-    converters.forEach { klaxon.converter(it(klaxon)) }
 }
