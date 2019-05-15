@@ -2,6 +2,7 @@ package informixcdc.logx
 
 import com.beust.klaxon.Klaxon
 import de.huxhorn.sulky.ulid.ULID
+import java.io.StringWriter
 import java.lang.Thread.sleep
 import java.time.Duration
 import java.time.Instant
@@ -97,13 +98,19 @@ fun Log.error(t: Throwable) {
         *sequence {
             var e: Throwable? = t
             while (e != null) {
-                yield("error" to e.message)
-                yield("stack_trace" to e.stackTrace.toString())
-                for (frame in e.stackTrace) {
-                    yield("func" to "${frame.className}.${frame.methodName}")
-                    yield("file" to frame.fileName)
-                    yield("line" to "${frame.fileName}:${frame.lineNumber}")
-                }
+                val sw = StringWriter()
+                yield(
+                    "error" to listOf(
+                        "message" to e.message,
+                        "stack_trace" to e.stackTrace.map { frame ->
+                            listOf(
+                                "func" to "${frame.className}.${frame.methodName}",
+                                "file" to frame.fileName,
+                                "line" to "${frame.fileName}:${frame.lineNumber}"
+                            )
+                        }
+                    )
+                )
                 e = e.cause
             }
         }.toList().toTypedArray()
