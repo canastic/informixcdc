@@ -192,8 +192,8 @@ internal class RecordsForwarderThread(
         }).apply { start() }
 
         running(log.start(session.id)) {
-            records.use { records ->
-                try {
+            try {
+                records.use { records ->
                     for (record in records) {
                         log.event(
                             "record_received",
@@ -203,18 +203,18 @@ internal class RecordsForwarderThread(
                         session.sync { send(RecordsMessage.Record(record)) }
                         heartbeater.interrupt()
                     }
-                } catch (e: Throwable) {
-                    if (!interrupted()) {
-                        session.sync { close(500, "Internal Server Error") }
-                        throw e
-                    }
-                    sync { error }?.let { e ->
-                        log.error(e)
-                    }
-                } finally {
-                    done.set(true)
-                    heartbeater.interrupt()
                 }
+            } catch (e: Throwable) {
+                if (!interrupted()) {
+                    session.sync { close(500, "Internal Server Error") }
+                    throw e
+                }
+                sync { error }?.let { e ->
+                    log.error(e)
+                }
+            } finally {
+                done.set(true)
+                heartbeater.interrupt()
             }
         }
     }
