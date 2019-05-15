@@ -94,19 +94,23 @@ class Records(
             val tablesByID = hashMapOf<Int, SizedTable>()
 
             for (table in sizedTables) {
-                conn.getCDCResult("EXECUTE FUNCTION cdc_set_fullrowlogging(?, ?);") {
-                    setString(1, table.fullName())
-                    setInt(2, 1)
-                }
+                try {
+                    conn.getCDCResult("EXECUTE FUNCTION cdc_set_fullrowlogging(?, ?);") {
+                        setString(1, table.fullName())
+                        setInt(2, 1)
+                    }
 
-                conn.getCDCResult("EXECUTE FUNCTION cdc_startcapture(?, 0, ?, ?, ?);") {
-                    setLong(1, sessionID)
-                    setString(2, table.fullName())
-                    setString(3, table.columns.fixedThenVariable().joinToString(separator = ","))
-                    setInt(4, table.id)
-                }
+                    conn.getCDCResult("EXECUTE FUNCTION cdc_startcapture(?, 0, ?, ?, ?);") {
+                        setLong(1, sessionID)
+                        setString(2, table.fullName())
+                        setString(3, table.columns.fixedThenVariable().joinToString(separator = ","))
+                        setInt(4, table.id)
+                    }
 
-                tablesByID[table.id] = table
+                    tablesByID[table.id] = table
+                } catch (e: Throwable) {
+                    throw Throwable("couldn't start capturing table ${table.name}", e)
+                }
             }
 
             conn.getCDCResult("EXECUTE FUNCTION cdc_activatesess(?, ?);") {
