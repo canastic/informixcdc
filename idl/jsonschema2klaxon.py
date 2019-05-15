@@ -26,7 +26,7 @@ class UnionByField(Union):
     def __init__(self, name, properties, inner_types, discriminant_json, variants, parent=None, embed_ref=None):
         super().__init__(name, properties, inner_types, parent=parent, embed_ref=embed_ref, sealed=True)
         self.discriminant_json = discriminant_json
-        # [(<discriminant field value>, <variant class name>)]
+        # [(<discriminant field value>, <variant class name>, <variant properties>)]
         self.variants = variants
 
 class Enum():
@@ -141,7 +141,6 @@ def extract_oneof(schemas, name):
     if not ok:
         type_, new_types, ok = extract_oneof_different_types(schemas, name)
     if not ok:
-        print(schemas, name)
         assert(False)
 
     if add_optional:
@@ -257,7 +256,7 @@ def extract_oneof_discriminant_field(schemas, name):
             name_path = variant_name
             if common_class != None:
                 name_path = f"{common_class.name}.{name_path}"
-            variants_by_tag.append((tag_value, name_path))
+            variants_by_tag.append((tag_value, name_path, variant_properties))
 
     return name, [parent], True
 
@@ -274,7 +273,7 @@ def extract_directive(schema, key):
 def extract_oneof_different_types(schemas, name):
     types = OrderedDict()
     for schema in schemas:
-        typ = schema["type"]
+        typ = schema.get("type")
         if typ in types:
             return None, None, False
         types[typ] = schema
@@ -535,7 +534,7 @@ class Emitter:
             printer.print(f"            override fun fromJson(jv: JsonValue): Any? = jv.obj!![\"{c.discriminant_json}\"].let " + "{ v ->\n")
             printer.print("                try { enabled = false; when {\n")
 
-            for tag_value, variant_class in c.variants:
+            for tag_value, variant_class, _ in c.variants:
                 kotlin_comparison = None
 
                 if isinstance(tag_value, bool):
@@ -555,10 +554,14 @@ class Emitter:
             print("")
             printer.print(f"            override fun toJson(value: Any): String = " + "try { enabled = false; " + f"when (value as {c.name}) " + "{\n")
 
-            for enum_value, variant_class in c.variants:
+            for enum_value, variant_class, variant_properties in c.variants:
                 printer.print(f"                is {variant_class} ->\n")
-                printer.print(f"                        klaxon.toJsonString(value as {variant_class}).dropLast(1) + ")
-                printer.print('",\\"' + c.discriminant_json + '\\":\\"' + enum_value + '\\"}"\n')
+                if len(variant_properties) > 0:
+                    printer.print(f"                        klaxon.toJsonString(value as {variant_class}).dropLast(1) + " + '",')
+                else:
+                    # Klaxon transforms empty classes to their toString 🤦‍♂️
+                    printer.print('                        "{')
+                printer.print('\\"' + c.discriminant_json + '\\":\\"' + enum_value + '\\"}"\n')
             printer.print("           } } finally { enabled = true }\n")
 
         else:
