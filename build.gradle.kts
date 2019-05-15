@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm") version "1.3.21"
+    application
 }
 
 group = "com.canastic"
@@ -21,4 +22,9 @@ dependencies {
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+}
+
+application {
+    // Define the main class for the application.
+    mainClassName = "informixcdc.MainKt"
 }
