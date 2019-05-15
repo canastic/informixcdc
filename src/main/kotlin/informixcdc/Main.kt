@@ -4,6 +4,7 @@ import com.beust.klaxon.Klaxon
 import com.beust.klaxon.KlaxonException
 import com.informix.jdbcx.IfxDataSource
 import de.huxhorn.sulky.ulid.ULID
+import informixcdc.config.heartbeatInterval
 import informixcdc.logx.duration
 import informixcdc.logx.error
 import informixcdc.logx.event
@@ -15,15 +16,20 @@ import informixcdc.logx.scope
 import informixcdc.logx.start
 import io.javalin.Javalin
 import io.javalin.websocket.WsSession
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 val klaxon = Klaxon().apply {
     RecordsRequest.setUpConverters(this)
-    Record.setUpConverters(this)
+    RecordsMessage.setUpConverters(this)
 }
 
 object config {
     val serverPort = System.getenv("INFORMIXCDC_SERVER_PORT").toInt()
+    val heartbeatInterval =
+        System.getenv()["INFORMIXCDC_HEARTBEAT_INTERVAL"]?.let { Duration.parse(it) } ?: Duration.ofSeconds(5)
 
     object informix {
         val host = System.getenv("INFORMIXCDC_INFORMIX_HOST")
@@ -73,7 +79,7 @@ fun main() = main { shutdown, done ->
                         )
                     }
                 )
-                val thread = RecordsForwarderThread(session, records)
+                val thread = RecordsForwarderThread(RecordsForwarderWsSession(session), records, heartbeatInterval)
                 threads[session.id] = thread
                 thread.start()
             }
@@ -100,7 +106,7 @@ fun main() = main { shutdown, done ->
     }
 }
 
-fun <T> recordsForwarderScope(session: WsSession, block: () -> T): T =
+internal fun <T> recordsForwarderScope(session: WsSession, block: () -> T): T =
     log.scope("records_forwarder", "ws_id" to session.id) {
         block()
     }
@@ -125,14 +131,45 @@ fun main(block: (Object, Object) -> Unit) {
     }
 }
 
-class RecordsForwarderThread(
-    private val session: WsSession,
-    private val records: Records
+internal class RecordsForwarderWsSession(
+    private val session: WsSession
+) {
+    val id
+        get() = session.id
+
+    fun send(message: RecordsMessage) =
+        session.send(klaxon.toJsonString(message))
+
+    fun close(statusCode: Int, reason: String) =
+        session.close(statusCode, reason)
+}
+
+internal class RecordsForwarderThread(
+    private val session: RecordsForwarderWsSession,
+    private val records: Records,
+    private val heartbeatInterval: Duration
 ) : Thread() {
     private val inherit = inheritLog()
     private var error: Throwable? = null
 
     override fun run() = inherit {
+        val done = AtomicBoolean(false)
+
+        val heartbeater = thread(start = true) {
+            while (!done.get()) {
+                try {
+                    sleep(heartbeatInterval.toMillis())
+                } catch (e: InterruptedException) {
+                    continue
+                }
+
+                if (done.get()) {
+                    break
+                }
+                session.sync { send(RecordsMessage.Heartbeat()) }
+            }
+        }
+
         running(log.start(session.id)) {
             records.use { records ->
                 try {
@@ -142,16 +179,20 @@ class RecordsForwarderThread(
                             "record_seq" to record.seq,
                             "record_type" to record::class.simpleName!!
                         )
-                        session.send(klaxon.toJsonString(record))
+                        session.sync { send(RecordsMessage.Record(record)) }
+                        heartbeater.interrupt()
                     }
                 } catch (e: Throwable) {
                     if (!interrupted()) {
-                        session.close(500, "Internal Server Error")
+                        session.sync { close(500, "Internal Server Error") }
                         throw e
                     }
-                    synchronized(this) { error }?.let { e ->
+                    sync { error }?.let { e ->
                         log.error(e)
                     }
+                } finally {
+                    done.set(true)
+                    heartbeater.interrupt()
                 }
             }
         }
@@ -165,9 +206,12 @@ class RecordsForwarderThread(
     }
 }
 
-val informixConnections = log.gauge("informix_connections")
+internal fun <T : Any, R> T.sync(block: (T.() -> R)): R =
+    synchronized(this) { block() }
 
-fun getConn(database: String): InformixConnection =
+internal val informixConnections = log.gauge("informix_connections")
+
+internal fun getConn(database: String): InformixConnection =
     with(
         IfxDataSource().apply {
             ifxIFXHOST = config.informix.host

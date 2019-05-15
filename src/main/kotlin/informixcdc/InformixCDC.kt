@@ -16,11 +16,11 @@ import com.informix.lang.IfxTypes.IFX_TYPE_NVCHAR
 import com.informix.lang.IfxTypes.IFX_TYPE_UDTFIXED
 import com.informix.lang.IfxTypes.IFX_TYPE_UDTVAR
 import com.informix.lang.IfxTypes.IFX_TYPE_VARCHAR
-import informixcdc.Record.RowImage
-import informixcdc.Record.RowImage.AfterUpdate
-import informixcdc.Record.RowImage.BeforeUpdate
-import informixcdc.Record.RowImage.Delete
-import informixcdc.Record.RowImage.Insert
+import informixcdc.RecordsMessage.Record.Record
+import informixcdc.RecordsMessage.Record.Record.RowImage.AfterUpdate
+import informixcdc.RecordsMessage.Record.Record.RowImage.BeforeUpdate
+import informixcdc.RecordsMessage.Record.Record.RowImage.Delete
+import informixcdc.RecordsMessage.Record.Record.RowImage.Insert
 import java.lang.Thread.currentThread
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -423,8 +423,8 @@ private fun RecordsIterable.next(bytes: Iterator<Byte>): Record? {
 private fun RecordsIterable.decodeRowImage(
     bytes: Iterator<Byte>,
     payloadSize: Int,
-    constructor: (Long, Long, String, String, String?, Map<String, RowImage.ColumnValue>) -> RowImage
-): RowImage {
+    constructor: (Long, Long, String, String, String?, Map<String, Record.RowImage.ColumnValue>) -> Record.RowImage
+): Record.RowImage {
     val (seq, txID, table) = decodeTableIDHeader(bytes)
 
     bytes.drop(4) // Reserved flags.
@@ -433,12 +433,12 @@ private fun RecordsIterable.decodeRowImage(
         bytes.readInt()
     }
 
-    val values = HashMap<String, RowImage.ColumnValue>()
+    val values = HashMap<String, Record.RowImage.ColumnValue>()
 
     var took = 0
     for ((column, size) in table.columns.fixed + table.columns.variable.zip(varLengths)) {
         val raw = bytes.take(size)
-        values[column.name] = RowImage.ColumnValue(
+        values[column.name] = Record.RowImage.ColumnValue(
             Base64.getEncoder().encode(raw).toString(UTF_8),
             column.decode(raw)
         )

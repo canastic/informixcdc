@@ -7,8 +7,8 @@ for file in $(git diff --cached --name-only | grep -e '\.kt$'); do
 done
 wait
 
-./idl/records_request_jsonschema.py | ./idl/jsonschema2klaxon.py informixcdc RecordsRequest > src/main/kotlin/informixcdc/RecordsRequest.kt
-./idl/record_jsonschema.py | ./idl/jsonschema2klaxon.py informixcdc Record > src/main/kotlin/informixcdc/Record.kt
+./idl/records_request.schema.json.py | ./idl/jsonschema2klaxon.py informixcdc RecordsRequest > src/main/kotlin/informixcdc/RecordsRequest.kt
+./idl/records_message.schema.json.py | ./idl/jsonschema2klaxon.py informixcdc RecordsMessage > src/main/kotlin/informixcdc/RecordsMessage.kt
 
 after=$(git diff --name-only)
 
