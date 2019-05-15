@@ -66,6 +66,11 @@ fun main() = main { shutdown ->
                     return@recordsForwarderScope
                 }
 
+                if (threads.containsKey(session.id)) {
+                    session.close(400, "already subscribed")
+                    return@recordsForwarderScope
+                }
+
                 val records = Records(
                     getConn = ::getConn,
                     server = config.informix.serverName,
