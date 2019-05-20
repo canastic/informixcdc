@@ -27,7 +27,7 @@ schema = {"oneOf": [
                 {"type": "object", "properties": [
                     ("type", {"const": "rollback_tx"}),
                 ]},
-                {"type": "object", "$comment": "klaxon{common_class=row_image}", "properties": [
+                {"type": "object", "$comment": "klaxon{common_class=row_image}", "$commonStruct": "row_image", "properties": [
                     ("type", {"enum": [
                         "insert",
                         "delete",
