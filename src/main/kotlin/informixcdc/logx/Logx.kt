@@ -16,7 +16,7 @@ val log: Log = Log(::emit)
 val processID = ULID().nextULID()
 
 private val serial = AtomicLong(0)
-private val values = ThreadLocal.withInitial<MutableList<Pair<String, Any>>> {
+private val values = ThreadLocal.withInitial<ArrayList<Pair<String, Any>>> {
     arrayListOf("process_id" to processID)
 }
 
@@ -24,10 +24,12 @@ class Log internal constructor(
     private val emit: (Sequence<KV>) -> Unit
 ) {
     fun <T> add(vararg kvs: KV, block: () -> T): T {
-        val prevLength = values.get().size
+        // I tried and failed to do this without cloning. There just doesn't seem to be a way
+        // to keep a slice of an array that mutates it by replacing the elements past its length.
+        val prev = ArrayList(values.get())
 
         return AutoCloseable {
-            values.set(values.get().subList(0, prevLength))
+            values.set(prev)
         }.use {
             values.get().addAll(kvs)
             block()
