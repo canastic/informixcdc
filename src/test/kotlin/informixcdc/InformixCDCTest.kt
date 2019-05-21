@@ -1,6 +1,7 @@
 package informixcdc
 
 import com.informix.jdbcx.IfxDataSource
+import informixcdc.RecordsMessage.Record.Record
 import java.math.BigDecimal
 import java.sql.Connection
 import java.sql.PreparedStatement
@@ -237,9 +238,9 @@ class IntegrationTest {
 
 fun testUser(): String = System.getenv("INFORMIXCDC_TEST_USER")
 
-fun testServerName(): String = System.getenv("INFORMIXCDC_TEST_SERVERNAME")
+fun testServerName(): String = System.getenv("INFORMIXCDC_TEST_SERVER_NAME")
 
-fun getConn(database: String? = null): Connection =
+fun getConn(database: String? = null): InformixConnection =
     IfxDataSource().apply {
         ifxIFXHOST = System.getenv("INFORMIXCDC_TEST_HOST")
         portNumber = System.getenv("INFORMIXCDC_TEST_PORT").toInt()
@@ -247,7 +248,7 @@ fun getConn(database: String? = null): Connection =
         user = testUser()
         password = System.getenv("INFORMIXCDC_TEST_PASSWORD")
         database?.let { databaseName = database }
-    }.connection
+    }.connection.asInformix()
 
 fun <R> useTestDatabase(block: (TestConnection) -> R): R {
     val database = "informixcdc_test_${UUID.randomUUID().toString().replace("-", "")}"
@@ -298,7 +299,7 @@ fun testTables(conn: TestConnection, tables: List<List<TestColumn<*>>>) {
 
     Records(
         { db -> getConn(db) },
-        System.getenv("INFORMIXCDC_TEST_SERVERNAME"),
+        testServerName(),
         tables.withIndex().map { (i, columns) ->
             TableDescription(
                 tableName(i),

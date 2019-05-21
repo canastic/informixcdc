@@ -26,5 +26,5 @@ dependencies {
 
 application {
     // Define the main class for the application.
-    mainClassName = "informixcdc.MainKt"
+    mainClassName = "informixcdc.main.MainKt"
 }

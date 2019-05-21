@@ -1,10 +1,15 @@
-package informixcdc
+package informixcdc.main
 
 import com.beust.klaxon.Klaxon
 import com.beust.klaxon.KlaxonException
 import com.informix.jdbcx.IfxDataSource
 import de.huxhorn.sulky.ulid.ULID
-import informixcdc.config.heartbeatInterval
+import informixcdc.InformixConnection
+import informixcdc.Records
+import informixcdc.RecordsMessage
+import informixcdc.RecordsRequest
+import informixcdc.TableDescription
+import informixcdc.asInformix
 import informixcdc.logx.duration
 import informixcdc.logx.error
 import informixcdc.logx.event
@@ -15,6 +20,8 @@ import informixcdc.logx.running
 import informixcdc.logx.scope
 import informixcdc.logx.start
 import informixcdc.logx.uncaught
+import informixcdc.main.config.heartbeatInterval
+import informixcdc.setUpConverters
 import io.javalin.Javalin
 import io.javalin.websocket.WsSession
 import java.time.Duration
@@ -176,20 +183,22 @@ internal class RecordsForwarderThread(
     override fun run() = inherit {
         val done = AtomicBoolean(false)
 
-        val heartbeater = log.uncaught(Thread {
-            while (!done.get()) {
-                try {
-                    sleep(heartbeatInterval.toMillis())
-                } catch (e: InterruptedException) {
-                    continue
-                }
+        val heartbeater = log.uncaught(
+            Thread {
+                while (!done.get()) {
+                    try {
+                        sleep(heartbeatInterval.toMillis())
+                    } catch (e: InterruptedException) {
+                        continue
+                    }
 
-                if (done.get()) {
-                    break
+                    if (done.get()) {
+                        break
+                    }
+                    session.sync { send(RecordsMessage.Heartbeat()) }
                 }
-                session.sync { send(RecordsMessage.Heartbeat()) }
             }
-        }).apply { start() }
+        ).apply { start() }
 
         running(log.start(session.id)) {
             try {
