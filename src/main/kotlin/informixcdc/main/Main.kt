@@ -24,6 +24,8 @@ import informixcdc.main.config.heartbeatInterval
 import informixcdc.setUpConverters
 import io.javalin.Javalin
 import io.javalin.websocket.WsSession
+import org.eclipse.jetty.server.Server
+import java.net.InetSocketAddress
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,6 +36,7 @@ val klaxon = Klaxon().apply {
 }
 
 object config {
+    val serverHost = System.getenv("INFORMIXCDC_SERVER_HOST").nonEmpty()
     val serverPort = System.getenv("INFORMIXCDC_SERVER_PORT").toInt()
     val heartbeatInterval =
         System.getenv()["INFORMIXCDC_HEARTBEAT_INTERVAL"]?.let { Duration.parse(it) } ?: Duration.ofSeconds(5)
@@ -115,8 +118,23 @@ fun main() = main { shutdown ->
         }
     }
 
-    running(log.start("server", "server_port" to config.serverPort), stopping = shutdown) {
-        app.start(config.serverPort)
+    running(
+        log.start(
+            "server",
+            "server_host" to (config.serverHost ?: ""),
+            "server_port" to config.serverPort
+        ),
+        stopping = shutdown
+    ) {
+        app.server {
+            Server(
+                if (config.serverHost != null) {
+                    InetSocketAddress(config.serverHost, config.serverPort)
+                } else {
+                    InetSocketAddress(config.serverPort)
+                }
+            )
+        }.start()
 
         synchronized(shutdown) { shutdown.wait() }
 
@@ -274,3 +292,8 @@ internal fun getConn(database: String): InformixConnection =
             }
         }
     }
+
+private fun String.nonEmpty(): String? = when (this) {
+    "" -> null
+    else -> this
+}
