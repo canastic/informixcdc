@@ -21,6 +21,7 @@ import informixcdc.logx.scope
 import informixcdc.logx.start
 import informixcdc.logx.uncaught
 import informixcdc.main.config.heartbeatInterval
+import informixcdc.main.config.monitorAPIPort
 import informixcdc.setUpConverters
 import io.javalin.Javalin
 import io.javalin.websocket.WsSession
@@ -40,6 +41,7 @@ object config {
     val serverPort = System.getenv("INFORMIXCDC_SERVER_PORT").toInt()
     val heartbeatInterval =
         System.getenv()["INFORMIXCDC_HEARTBEAT_INTERVAL"]?.let { Duration.parse(it) } ?: Duration.ofSeconds(5)
+    val monitorAPIPort = System.getenv()["MONITOR_API_PORT"]?.toInt()
 
     object informix {
         val host = System.getenv("INFORMIXCDC_INFORMIX_HOST")
@@ -51,6 +53,8 @@ object config {
 }
 
 fun main() = main { shutdown ->
+    startMonitorAPI()
+
     val app = Javalin.create()
 
     val threads = log.gauged(
@@ -296,4 +300,17 @@ internal fun getConn(database: String): InformixConnection =
 private fun String.nonEmpty(): String? = when (this) {
     "" -> null
     else -> this
+}
+
+private fun startMonitorAPI() {
+    monitorAPIPort?.let { port ->
+        Thread {
+            val app = Javalin.create()
+            app.get("/health") { ctx ->
+                ctx.result("\"ok\"")
+            }
+            app.server { Server(InetSocketAddress("127.0.0.1", port)) }
+            app.start()
+        }.start()
+    }
 }
