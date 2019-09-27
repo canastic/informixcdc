@@ -1,7 +1,6 @@
 package informixcdc.main
 
 import com.beust.klaxon.Klaxon
-import com.beust.klaxon.KlaxonException
 import com.informix.jdbcx.IfxDataSource
 import de.huxhorn.sulky.ulid.ULID
 import informixcdc.InformixConnection
@@ -11,25 +10,18 @@ import informixcdc.RecordsRequest
 import informixcdc.TableDescription
 import informixcdc.asInformix
 import informixcdc.logx.duration
-import informixcdc.logx.error
-import informixcdc.logx.event
 import informixcdc.logx.gauged
-import informixcdc.logx.inheritLog
 import informixcdc.logx.log
-import informixcdc.logx.running
-import informixcdc.logx.scope
 import informixcdc.logx.start
-import informixcdc.logx.uncaught
 import informixcdc.main.config.heartbeatInterval
-import informixcdc.main.config.monitorAPIPort
+import informixcdc.main.config.request
 import informixcdc.setUpConverters
-import io.javalin.Javalin
-import io.javalin.websocket.WsSession
-import org.eclipse.jetty.server.Server
-import java.net.InetSocketAddress
+import java.lang.Thread.interrupted
+import java.lang.Thread.sleep
 import java.time.Duration
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 val klaxon = Klaxon().apply {
     RecordsRequest.setUpConverters(this)
@@ -37,11 +29,10 @@ val klaxon = Klaxon().apply {
 }
 
 object config {
-    val serverHost = System.getenv("INFORMIXCDC_SERVER_HOST").nonEmpty()
-    val serverPort = System.getenv("INFORMIXCDC_SERVER_PORT").toInt()
     val heartbeatInterval =
         System.getenv()["INFORMIXCDC_HEARTBEAT_INTERVAL"]?.let { Duration.parse(it) } ?: Duration.ofSeconds(5)
-    val monitorAPIPort = System.getenv()["MONITOR_API_PORT"]?.toInt()
+    val request =
+        System.getenv("INFORMIXCDC_REQUEST").let { klaxon.parse<RecordsRequest>(it) }!!
 
     object informix {
         val host = System.getenv("INFORMIXCDC_INFORMIX_HOST")
@@ -52,214 +43,80 @@ object config {
     }
 }
 
-fun main() = main { shutdown ->
-    startMonitorAPI()
-
-    val app = Javalin.create()
-
-    val threads = log.gauged(
-        ConcurrentHashMap<String, RecordsForwarderThread>(),
-        "records_forwarder_threads"
-    ) { size.toLong() }
-    val connections = log.gauge("websocket_connections")
-
-    app.ws("/records") { ws ->
-        ws.onConnect { session ->
-            recordsForwarderScope(session) {
-                log.event("connected", "remote_address" to session.remoteAddress)
-                connections.add(1)
-            }
-        }
-
-        ws.onMessage { session, msg ->
-            recordsForwarderScope(session) {
-                val request = try {
-                    klaxon.parse<RecordsRequest>(msg)!!
-                } catch (e: KlaxonException) {
-                    session.close(400, e.message!!)
-                    return@recordsForwarderScope
-                }
-
-                if (threads.containsKey(session.id)) {
-                    session.close(400, "already subscribed")
-                    return@recordsForwarderScope
-                }
-
-                val records = Records(
-                    getConn = ::getConn,
-                    server = config.informix.serverName,
-                    fromSeq = request.fromSeq,
-                    tables = request.tables.map {
-                        TableDescription(
-                            name = it.name,
-                            database = it.database,
-                            owner = it.owner,
-                            columns = it.columns
-                        )
-                    }
-                )
-                val thread = log.uncaught(
-                    RecordsForwarderThread(
-                        RecordsForwarderWsSession(session),
-                        records,
-                        heartbeatInterval
-                    )
-                )
-                threads[session.id] = thread
-                thread.start()
-            }
-        }
-
-        ws.onClose { session, _, reason ->
-            recordsForwarderScope(session) {
-                try {
-                    threads.remove(session.id)?.safeStop(reason?.let { Throwable(it) })
-                } finally {
-                    log.event("closed", "reason" to (reason ?: ""))
-                    connections.add(-1)
-                }
-            }
-        }
-    }
-
-    running(
-        log.start(
-            "server",
-            "server_host" to (config.serverHost ?: ""),
-            "server_port" to config.serverPort
-        ),
-        stopping = shutdown
-    ) {
-        app.server {
-            Server(
-                if (config.serverHost != null) {
-                    InetSocketAddress(config.serverHost, config.serverPort)
-                } else {
-                    InetSocketAddress(config.serverPort)
-                }
+fun main() {
+    Records(
+        getConn = ::getConn,
+        server = config.informix.serverName,
+        fromSeq = request.fromSeq,
+        tables = request.tables.map {
+            TableDescription(
+                name = it.name,
+                database = it.database,
+                owner = it.owner,
+                columns = it.columns
             )
-        }.start()
-
-        synchronized(shutdown) { shutdown.wait() }
-
-        app.stop()
-    }
-}
-
-internal fun <T> recordsForwarderScope(session: WsSession, block: () -> T): T =
-    log.scope("records_forwarder", "ws_id" to session.id) {
-        block()
-    }
-
-internal class ObjectOf<T>(var value: T) : Object()
-
-internal fun main(block: (Object) -> Unit) {
-    val shutdown = Object()
-    val done = ObjectOf(false)
-
-    Runtime.getRuntime().addShutdownHook(
-        Thread {
-            shutdown.sync { shutdown.notifyAll() }
-            done.sync {
-                wait(10 * 1000)
-                if (!value) {
-                    log.event("shutdown_timeout")
-                }
-            }
         }
-    )
-
-    try {
-        running(log.start("main"), stopping = shutdown) {
-            block(shutdown)
-        }
-    } finally {
-        done.sync {
-            value = true
-            notifyAll()
+    ).use { records ->
+        for (message in records.iterator().withHeartbeats(heartbeatInterval)) {
+            println(klaxon.toJsonString(message))
         }
     }
 }
 
-internal class RecordsForwarderWsSession(
-    private val session: WsSession
-) {
-    val id
-        get() = session.id
+internal sealed class TimedIteratorItem<out T>
+internal data class Item<out T>(val item: T) : TimedIteratorItem<T>()
+internal class Timeout<T> : TimedIteratorItem<T>()
 
-    fun send(message: RecordsMessage) =
-        session.send(klaxon.toJsonString(message))
-
-    fun close(statusCode: Int, reason: String) =
-        session.close(statusCode, reason)
-}
-
-internal class RecordsForwarderThread(
-    private val session: RecordsForwarderWsSession,
-    private val records: Records,
-    private val heartbeatInterval: Duration
-) : Thread() {
-    private val inherit = inheritLog()
-    private var error: Throwable? = null
-
-    override fun run() = inherit {
+internal fun <T, I : Iterator<T>> I.timed(timeout: Duration): Iterator<TimedIteratorItem<T>> = let { wrapped ->
+    iterator {
         val done = AtomicBoolean(false)
+        val items = LinkedBlockingQueue<TimedIteratorItem<T>>()
 
-        val heartbeater = log.uncaught(
-            Thread {
-                while (!done.get()) {
-                    try {
-                        sleep(heartbeatInterval.toMillis())
-                    } catch (e: InterruptedException) {
-                        continue
-                    }
-
-                    if (done.get()) {
-                        break
-                    }
-                    session.sync { send(RecordsMessage.Heartbeat()) }
+        val timer = thread(start = true) {
+            while (!done.get()) {
+                try {
+                    sleep(timeout.toMillis())
+                    items.put(Timeout())
+                } catch (e: InterruptedException) {
+                    interrupted()
+                    continue
                 }
             }
-        ).apply { start() }
+        }
 
-        running(log.start(session.id)) {
+        thread(start = true) {
             try {
-                records.use { records ->
-                    for (record in records) {
-                        log.event(
-                            "record_received",
-                            "record_seq" to record.seq,
-                            "record_type" to record::class.simpleName!!
-                        )
-                        session.sync { send(RecordsMessage.Record(record)) }
-                        heartbeater.interrupt()
-                    }
-                }
-            } catch (e: Throwable) {
-                if (!interrupted()) {
-                    session.sync { close(500, "Internal Server Error") }
-                    throw e
-                }
-                sync { error }?.let { e ->
-                    log.error(e)
+                for (item in wrapped) {
+                    timer.interrupt()
+                    items.put(Item(item))
                 }
             } finally {
-                done.set(true)
-                heartbeater.interrupt()
+                items.put(null)
             }
         }
-    }
 
-    fun safeStop(t: Throwable? = null) {
-        synchronized(this) {
-            error = t
+        while (true) {
+            val item = items.take()
+            if (item != null) {
+                yield(item)
+            } else {
+                break
+            }
         }
-        interrupt()
+
+        done.set(true)
     }
 }
 
-internal fun <T : Any, R> T.sync(block: (T.() -> R)): R =
-    synchronized(this) { block() }
+internal fun Iterator<RecordsMessage.Record.Record>.withHeartbeats(interval: Duration): Iterator<RecordsMessage> =
+    iterator {
+        timed(interval).forEach { timedItem ->
+            when (timedItem) {
+                is Item -> yield(RecordsMessage.Record(timedItem.item))
+                is Timeout -> yield(RecordsMessage.Heartbeat())
+            }
+        }
+    }
 
 internal val informixConnections = log.gauge("informix_connections")
 
@@ -296,21 +153,3 @@ internal fun getConn(database: String): InformixConnection =
             }
         }
     }
-
-private fun String.nonEmpty(): String? = when (this) {
-    "" -> null
-    else -> this
-}
-
-private fun startMonitorAPI() {
-    monitorAPIPort?.let { port ->
-        Thread {
-            val app = Javalin.create()
-            app.get("/health") { ctx ->
-                ctx.result("\"ok\"")
-            }
-            app.server { Server(InetSocketAddress("127.0.0.1", port)) }
-            app.start()
-        }.start()
-    }
-}
