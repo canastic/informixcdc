@@ -555,7 +555,7 @@ class Emitter:
 
             for enum_value, variant_class, variant_properties in c.variants:
                 printer.print(f"                is {variant_class} ->\n")
-                if len(variant_properties) > 0:
+                if len(variant_properties) > 0 or len(c.properties) > 0:
                     printer.print(f"                        klaxon.toJsonString(value as {variant_class}).dropLast(1) + " + '",')
                 else:
                     # Klaxon transforms empty classes to their toString 🤦‍♂️

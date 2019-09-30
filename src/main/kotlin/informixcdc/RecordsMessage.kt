@@ -267,7 +267,7 @@ sealed class RecordsMessage {
                         is CommitTx ->
                                 klaxon.toJsonString(value as CommitTx).dropLast(1) + ",\"type\":\"commit_tx\"}"
                         is RollbackTx ->
-                                "{\"type\":\"rollback_tx\"}"
+                                klaxon.toJsonString(value as RollbackTx).dropLast(1) + ",\"type\":\"rollback_tx\"}"
                         is RowImage.Insert ->
                                 klaxon.toJsonString(value as RowImage.Insert).dropLast(1) + ",\"type\":\"insert\"}"
                         is RowImage.Delete ->
@@ -277,7 +277,7 @@ sealed class RecordsMessage {
                         is RowImage.AfterUpdate ->
                                 klaxon.toJsonString(value as RowImage.AfterUpdate).dropLast(1) + ",\"type\":\"after_update\"}"
                         is Discard ->
-                                "{\"type\":\"discard\"}"
+                                klaxon.toJsonString(value as Discard).dropLast(1) + ",\"type\":\"discard\"}"
                         is Truncate ->
                                 klaxon.toJsonString(value as Truncate).dropLast(1) + ",\"type\":\"truncate\"}"
                    } } finally { enabled = true }
