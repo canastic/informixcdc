@@ -10,6 +10,7 @@ import informixcdc.RecordsRequest
 import informixcdc.TableDescription
 import informixcdc.asInformix
 import informixcdc.logx.duration
+import informixcdc.logx.error
 import informixcdc.logx.gauged
 import informixcdc.logx.log
 import informixcdc.logx.start
@@ -44,6 +45,10 @@ object config {
 }
 
 fun main() {
+    Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+        log.error(e)
+    }
+
     Records(
         getConn = ::getConn,
         server = config.informix.serverName,
