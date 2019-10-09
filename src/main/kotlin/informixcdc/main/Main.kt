@@ -2,26 +2,23 @@ package informixcdc.main
 
 import com.beust.klaxon.Klaxon
 import com.informix.jdbcx.IfxDataSource
-import de.huxhorn.sulky.ulid.ULID
 import informixcdc.InformixConnection
 import informixcdc.Records
 import informixcdc.RecordsMessage
 import informixcdc.RecordsRequest
 import informixcdc.TableDescription
 import informixcdc.asInformix
-import informixcdc.logx.duration
-import informixcdc.logx.error
-import informixcdc.logx.gauged
-import informixcdc.logx.log
-import informixcdc.logx.start
 import informixcdc.main.config.heartbeatInterval
 import informixcdc.main.config.request
 import informixcdc.setUpConverters
+import informixcdc.stackTraceString
 import java.lang.Thread.interrupted
 import java.lang.Thread.sleep
 import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 val klaxon = Klaxon().apply {
@@ -42,11 +39,17 @@ object config {
         val user = System.getenv("INFORMIXCDC_INFORMIX_USER")
         val password = System.getenv("INFORMIXCDC_INFORMIX_PASSWORD")
     }
+
+    val log = System.getenv("HENCELOG_FROM").let {
+        val parts = klaxon.parseArray<Any>(it)!!
+        Triple(parts[0] as String, parts[1] as String, parts[2] as Integer)
+    }
 }
 
 fun main() {
-    Thread.setDefaultUncaughtExceptionHandler { thread, e ->
-        log.error(e)
+    Thread.setDefaultUncaughtExceptionHandler { _, e ->
+        log("exception" to e.toString() + "\n" + e.stackTraceString())
+        System.exit(0) // TODO: Do proper cancelling
     }
 
     Records(
@@ -60,7 +63,8 @@ fun main() {
                 owner = it.owner,
                 columns = it.columns
             )
-        }
+        },
+        logFunc = ::log
     ).use { records ->
         for (message in records.iterator().withHeartbeats(heartbeatInterval)) {
             println(klaxon.toJsonString(message))
@@ -123,8 +127,6 @@ internal fun Iterator<RecordsMessage.Record.Record>.withHeartbeats(interval: Dur
         }
     }
 
-internal val informixConnections = log.gauge("informix_connections")
-
 internal fun getConn(database: String): InformixConnection =
     with(
         IfxDataSource().apply {
@@ -136,25 +138,49 @@ internal fun getConn(database: String): InformixConnection =
             databaseName = database
         }
     ) {
-        val id = "informix_conn:${ULID().nextULID()}"
+        log(
+            "informix_connection" to "connecting",
+            "informix_address" to "${config.informix.host}:${config.informix.port}",
+            "informix_database" to "$database@${config.informix.serverName}"
+        )
+        val t = Instant.now()
+        val conn = getConnection()
+        log(
+            "informix_connection" to "connected",
+            "elapsed" to Duration.between(t, Instant.now())
+        )
 
-        val conn =
-            log.duration(
-                "informix_connected",
-                "informix_address" to "${config.informix.host}:${config.informix.port}",
-                "informix_database" to "$database@${config.informix.serverName}",
-                "running_id" to id
-            ) {
-                getConnection()
-            }
-
-        val lifetime = gauged(informixConnections, log.start(id))
         object : InformixConnection by conn.asInformix() {
             override fun close() = try {
-                lifetime.stopping()
+                log("informix_connection" to "stopping")
                 conn.close()
             } finally {
-                lifetime.stopped()
+                log("informix_connection" to "stopped")
             }
         }
     }
+
+val atomicSerial = AtomicLong(config.log.third.toLong())
+
+fun log(vararg kvs: Pair<String, Any?>) {
+    val (group, thread, _) = config.log
+    val kvList = ArrayList<Any>(kvs.map { (k, v) -> listOf(k, v) })
+    kvList.add(listOf("t", Instant.now()))
+    System.err.println(
+        Klaxon().toJsonString(
+            listOf(
+                listOf(
+                    listOf(
+                        listOf(),
+                        listOf(
+                            group,
+                            thread,
+                            atomicSerial.addAndGet(1)
+                        )
+                    )
+                ),
+                kvList
+            )
+        )
+    )
+}

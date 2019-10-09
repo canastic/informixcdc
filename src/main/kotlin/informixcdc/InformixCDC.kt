@@ -21,6 +21,8 @@ import informixcdc.RecordsMessage.Record.Record.RowImage.AfterUpdate
 import informixcdc.RecordsMessage.Record.Record.RowImage.BeforeUpdate
 import informixcdc.RecordsMessage.Record.Record.RowImage.Delete
 import informixcdc.RecordsMessage.Record.Record.RowImage.Insert
+import java.io.ByteArrayOutputStream
+import java.io.PrintWriter
 import java.lang.Thread.currentThread
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -66,28 +68,43 @@ private data class FullColumnsDescription(
 private fun FullColumnsDescription.fixedThenVariable(): List<String> =
     fixed.map { (nameType, _) -> nameType.name } + variable.map { it.name }
 
+private var log: (Array<out Pair<String, Any?>>) -> Unit = {}
+
 class Records(
     private val getConn: (String) -> InformixConnection,
     private val server: String,
     private val tables: List<TableDescription>,
     private val fromSeq: Long? = null,
     private val readTimeout: Duration? = Duration.ofMillis(1 * 1000),
-    private val maxRecords: Long = 100
+    private val maxRecords: Long = 100,
+    logFunc: (Array<out Pair<String, Any?>>) -> Unit = {}
 ) {
+    init {
+        log = logFunc
+    }
+
     fun <R> use(block: (Iterable<Record>) -> R): R {
-        val sizedTables = loadSizes(getConn, tables)
+        val sizedTables = logDuration("load" to "sizes") {
+            loadSizes(getConn, tables)
+        }
 
         getConn("syscdcv1").use { conn ->
-            val errorCodes = conn.loadErrorCodes()
-            val recordTypes = conn.loadRecordTypes()
+            val errorCodes = logDuration("load" to "errorCodes") {
+                conn.loadErrorCodes()
+            }
+            val recordTypes = logDuration("load" to "recordTypes") {
+                conn.loadRecordTypes()
+            }
             val getCDCResult = conn.makeGetCDCResult(errorCodes)
 
-            val sessionID: Long = conn.fetchOne("EXECUTE FUNCTION cdc_opensess(?, 0, ?, ?, 1, 1);") { row ->
-                setString(1, server)
-                setLong(2, readTimeout?.seconds ?: -1)
-                setLong(3, maxRecords)
-                row {
-                    getLong(1)
+            val sessionID: Long = logDuration("execute" to "cdc_opensess") {
+                conn.fetchOne("EXECUTE FUNCTION cdc_opensess(?, 0, ?, ?, 1, 1);") { row ->
+                    setString(1, server)
+                    setLong(2, readTimeout?.seconds ?: -1)
+                    setLong(3, maxRecords)
+                    row {
+                        getLong(1)
+                    }
                 }
             }
 
@@ -95,16 +112,28 @@ class Records(
 
             for (table in sizedTables) {
                 try {
-                    conn.getCDCResult("EXECUTE FUNCTION cdc_set_fullrowlogging(?, ?);") {
-                        setString(1, table.fullName())
-                        setInt(2, 1)
+                    logDuration(
+                        "execute" to "cdc_set_fullrowlogging",
+                        "sessionID" to sessionID,
+                        "table" to table.fullName()
+                    ) {
+                        conn.getCDCResult("EXECUTE FUNCTION cdc_set_fullrowlogging(?, ?);") {
+                            setString(1, table.fullName())
+                            setInt(2, 1)
+                        }
                     }
 
-                    conn.getCDCResult("EXECUTE FUNCTION cdc_startcapture(?, 0, ?, ?, ?);") {
-                        setLong(1, sessionID)
-                        setString(2, table.fullName())
-                        setString(3, table.columns.fixedThenVariable().joinToString(separator = ","))
-                        setInt(4, table.id)
+                    logDuration(
+                        "execute" to "cdc_startcapture",
+                        "sessionID" to sessionID,
+                        "table" to table.fullName()
+                    ) {
+                        conn.getCDCResult("EXECUTE FUNCTION cdc_startcapture(?, 0, ?, ?, ?);") {
+                            setLong(1, sessionID)
+                            setString(2, table.fullName())
+                            setString(3, table.columns.fixedThenVariable().joinToString(separator = ","))
+                            setInt(4, table.id)
+                        }
                     }
 
                     tablesByID[table.id] = table
@@ -113,9 +142,15 @@ class Records(
                 }
             }
 
-            conn.getCDCResult("EXECUTE FUNCTION cdc_activatesess(?, ?);") {
-                setLong(1, sessionID)
-                setLong(2, fromSeq ?: 0)
+            logDuration(
+                "execute" to "cdc_activatesess",
+                "sessionID" to sessionID,
+                "fromSeq" to (fromSeq ?: 0)
+            ) {
+                conn.getCDCResult("EXECUTE FUNCTION cdc_activatesess(?, ?);") {
+                    setLong(1, sessionID)
+                    setLong(2, fromSeq ?: 0)
+                }
             }
 
             return try {
@@ -128,11 +163,38 @@ class Records(
                     )
                 )
             } finally {
-                conn.getCDCResult("EXECUTE FUNCTION cdc_closesess(?);") {
-                    setLong(1, sessionID)
+                logDuration(
+                    "execute" to "cdc_closesess",
+                    "sessionID" to sessionID
+                ) {
+                    conn.getCDCResult("EXECUTE FUNCTION cdc_closesess(?);") {
+                        setLong(1, sessionID)
+                    }
                 }
             }
         }
+    }
+}
+
+private fun <T> logDuration(vararg kvs: Pair<String, Any>, f: () -> T): T {
+    val start = Instant.now()
+    log(kvs)
+    var caught: Throwable? = null
+    return try {
+        f()
+    } catch (e: Throwable) {
+        caught = e
+        throw e
+    } finally {
+        val endKvs = kvs.toMutableList()
+        endKvs.add("elapsed" to Duration.between(start, Instant.now()))
+        if (caught == null) {
+            endKvs.add("outcome" to "success")
+        } else {
+            endKvs.add("outcome" to "failure")
+            endKvs.add("exception" to caught.toString() + "\n" + caught.stackTraceString())
+        }
+        log(endKvs.toTypedArray())
     }
 }
 
@@ -183,7 +245,10 @@ data class ColumnWithDecoder(
     val decode: (ByteArray) -> Any?
 )
 
-private fun Connection.loadTableSize(table: String, columns: List<String>? = null): Pair<Int, FullColumnsDescription> {
+private fun Connection.loadTableSize(
+    table: String,
+    columns: List<String>? = null
+): Pair<Int, FullColumnsDescription> {
     val tableID = fetchTableID(table)
 
     val fixed = ArrayList<Pair<ColumnWithDecoder, Int>>()
@@ -272,7 +337,10 @@ private fun Connection.query(sql: String, config: PreparedStatement.((ResultSet.
     }
 }
 
-private fun <T> Connection.fetchOne(sql: String, config: PreparedStatement.((ResultSet.() -> T) -> Unit) -> Unit): T {
+private fun <T> Connection.fetchOne(
+    sql: String,
+    config: PreparedStatement.((ResultSet.() -> T) -> Unit) -> Unit
+): T {
     var result: T? = null
     query(sql) { row ->
         config(this) { handleRow ->
@@ -682,3 +750,9 @@ private fun columnSizeForType(type: Int, typeName: String?, length: Int): Int =
         else ->
             length
     }
+
+fun Throwable.stackTraceString(): String {
+    val bytes = ByteArrayOutputStream()
+    printStackTrace(PrintWriter(bytes))
+    return bytes.toString("utf-8")
+}
