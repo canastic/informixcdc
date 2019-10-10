@@ -16,7 +16,7 @@ import java.lang.Thread.interrupted
 import java.lang.Thread.sleep
 import java.time.Duration
 import java.time.Instant
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.LinkedTransferQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
@@ -79,7 +79,7 @@ internal class Timeout<T> : TimedIteratorItem<T>()
 internal fun <T, I : Iterator<T>> I.timed(timeout: Duration): Iterator<TimedIteratorItem<T>> = let { wrapped ->
     iterator {
         val done = AtomicBoolean(false)
-        val items = LinkedBlockingQueue<TimedIteratorItem<T>>()
+        val items = LinkedTransferQueue<TimedIteratorItem<T>>()
 
         val timer = thread(start = true) {
             while (!done.get()) {
@@ -97,10 +97,10 @@ internal fun <T, I : Iterator<T>> I.timed(timeout: Duration): Iterator<TimedIter
             try {
                 for (item in wrapped) {
                     timer.interrupt()
-                    items.put(Item(item))
+                    items.transfer(Item(item))
                 }
             } finally {
-                items.put(null)
+                items.transfer(null)
             }
         }
 
