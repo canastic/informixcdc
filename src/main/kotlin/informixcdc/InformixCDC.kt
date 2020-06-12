@@ -222,8 +222,10 @@ private fun loadSizes(getConn: (String) -> Connection, tables: List<TableDescrip
     return Array(tablesArray.count()) { i ->
         val table = tablesArray[i]
         getConn(table.database).use { conn ->
-            val (id, columns) = conn.loadTableSize(table.name, table.columns)
-            SizedTable(id, table.name, table.database, table.owner, columns)
+            logDuration("load" to "tableSize", "table" to table.name) {
+                val (id, columns) = conn.loadTableSize(table.name, table.columns)
+                SizedTable(id, table.name, table.database, table.owner, columns)
+            }
         }
     }
 }
